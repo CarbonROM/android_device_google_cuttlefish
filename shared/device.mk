@@ -298,6 +298,13 @@ endif
 PRODUCT_PACKAGES += \
     android.hardware.atrace@1.0-service
 
+
+#
+# OemLock aidl HAL
+#
+PRODUCT_PACKAGES += \
+    android.hardware.oemlock-service.example
+
 #
 # Authsecret HAL
 #
@@ -547,6 +554,9 @@ endif
 
 ifdef TARGET_DEDICATED_RECOVERY
 PRODUCT_BUILD_RECOVERY_IMAGE := true
+PRODUCT_PACKAGES += linker.vendor_ramdisk shell_and_utilities_vendor_ramdisk
+else
+PRODUCT_PACKAGES += linker.recovery shell_and_utilities_recovery
 endif
 
 #
