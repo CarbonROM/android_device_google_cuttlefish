@@ -12,6 +12,7 @@
 /dev/block/by-name/cache u:object_r:cache_block_device:s0
 /dev/block/by-name/metadata u:object_r:metadata_block_device:s0
 
+/dev/block/vdc  u:object_r:frp_block_device:s0
 /dev/block/pmem0  u:object_r:rebootescrow_device:s0
 /dev/block/zram0  u:object_r:swap_block_device:s0
 /dev/dri u:object_r:gpu_device:s0
@@ -80,6 +81,7 @@
 /vendor/bin/hw/android\.hardware\.gatekeeper@1\.0-service.remote  u:object_r:hal_gatekeeper_remote_exec:s0
 /vendor/bin/hw/android\.hardware\.oemlock-service.example u:object_r:hal_oemlock_default_exec:s0
 /vendor/bin/hw/android\.hardware\.authsecret@1\.0-service  u:object_r:hal_authsecret_default_exec:s0
+/vendor/bin/hw/android\.hardware\.authsecret-service.example u:object_r:hal_authsecret_default_exec:s0
 /vendor/bin/hw/android\.hardware\.rebootescrow-service\.default  u:object_r:hal_rebootescrow_default_exec:s0
 /vendor/bin/init\.insmod\.sh  u:object_r:init_insmod_sh_exec:s0
 
