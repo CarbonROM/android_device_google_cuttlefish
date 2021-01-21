@@ -397,6 +397,14 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
                " does not work with vm_manager=" << FLAGS_vm_manager;
   }
 
+  // TODO (177926450) These lines are needed because the current uboot config
+  // assuming only one memory size for the arm config. Remove these lines once
+  // the memory size can be variable for arm.
+  // The default for the CF Arm guest RAM size is 3027 MB on rockpi
+  if (HostArch() == "aarch64") {
+    SetCommandLineOptionWithMode("memory_mb", "3027", SET_FLAGS_DEFAULT);
+  }
+
   tmp_config_obj.set_cpus(FLAGS_cpus);
   tmp_config_obj.set_memory_mb(FLAGS_memory_mb);
 
@@ -438,12 +446,6 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
 
   std::string discovered_ramdisk = fetcher_config.FindCvdFileWithSuffix(kInitramfsImg);
   std::string foreign_ramdisk = FLAGS_initramfs_path.size () ? FLAGS_initramfs_path : discovered_ramdisk;
-
-  // TODO(rammuthiah) Bootloader boot doesn't work in the following scenarios:
-  // 1. Arm64 - On Crosvm, we have no implementation currently.
-  if (FLAGS_vm_manager == CrosvmManager::name() && HostArch() == "aarch64") {
-    SetCommandLineOptionWithMode("use_bootloader", "false", SET_FLAGS_DEFAULT);
-  }
 
   tmp_config_obj.set_boot_image_kernel_cmdline(boot_image_unpacker.kernel_cmdline());
   tmp_config_obj.set_guest_enforce_security(FLAGS_guest_enforce_security);
