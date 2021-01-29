@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2020 The Android Open Source Project
+// Copyright (C) 2021 The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,22 +13,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-cc_library_static {
-    name: "libcuttlefish_screen_connector",
+cc_binary {
+    name: "restart_cvd",
     srcs: [
-        "socket_based_screen_connector.cpp",
-        "wayland_screen_connector.cpp",
+        "restart_cvd.cc",
     ],
     shared_libs: [
-        "libcuttlefish_fs",
         "libbase",
+        "libcuttlefish_fs",
+        "libcuttlefish_utils",
         "libjsoncpp",
-        "liblog",
     ],
     static_libs: [
         "libcuttlefish_host_config",
-        "libcuttlefish_utils",
-        "libcuttlefish_wayland_server",
+        "libcuttlefish_vm_manager",
+        "libgflags",
     ],
-    defaults: ["cuttlefish_host"],
+    defaults: ["cuttlefish_host", "cuttlefish_libicuuc"],
 }

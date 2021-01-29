@@ -41,6 +41,8 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <android-base/cmsg.h>
+
 #include "vm_sockets.h"
 
 /**
@@ -110,6 +112,8 @@ class FileInstance;
  * reported with a new, closed FileInstance with the errno set.
  */
 class SharedFD {
+  // Give WeakFD access to the underlying shared_ptr.
+  friend class WeakFD;
  public:
   inline SharedFD();
   SharedFD(const std::shared_ptr<FileInstance>& in) : value_(in) {}
@@ -160,6 +164,47 @@ class SharedFD {
   static SharedFD ErrorFD(int error);
 
   std::shared_ptr<FileInstance> value_;
+};
+
+/**
+ * A non-owning reference to a FileInstance. The referenced FileInstance needs
+ * to be managed by a SharedFD. A WeakFD needs to be converted to a SharedFD to
+ * access the underlying FileInstance.
+ */
+class WeakFD {
+ public:
+  WeakFD(SharedFD shared_fd) : value_(shared_fd.value_) {}
+
+  // Creates a new SharedFD object that shares ownership of the underlying fd.
+  // Callers need to check that the returned SharedFD is open before using it.
+  SharedFD lock() const;
+
+ private:
+  std::weak_ptr<FileInstance> value_;
+};
+
+// Provides RAII semantics for memory mappings, preventing memory leaks. It does
+// not however prevent use-after-free errors since the underlying pointer can be
+// extracted and could survive this object.
+class ScopedMMap {
+ public:
+  ScopedMMap();
+  ScopedMMap(void* ptr, size_t size);
+  ScopedMMap(const ScopedMMap& other) = delete;
+  ScopedMMap& operator=(const ScopedMMap& other) = delete;
+  ScopedMMap(ScopedMMap&& other);
+
+  ~ScopedMMap();
+
+  void* get() { return ptr_; }
+  const void* get() const { return ptr_; }
+  size_t len() const { return len_; }
+
+  operator bool() const { return ptr_ != MAP_FAILED; }
+
+ private:
+  void* ptr_ = MAP_FAILED;
+  size_t len_;
 };
 
 /**
@@ -337,6 +382,16 @@ class FileInstance {
     return rval;
   }
 
+  template <typename... Args>
+  ssize_t SendFileDescriptors(const void* buf, size_t len, Args&&... sent_fds) {
+    std::vector<int> fds;
+    android::base::Append(fds, std::forward<int>(sent_fds->fd_)...);
+    errno = 0;
+    auto ret = android::base::SendFileDescriptorVector(fd_, buf, len, fds);
+    errno_ = errno;
+    return ret;
+  }
+
   int Shutdown(int how) {
     errno = 0;
     int rval = shutdown(fd_, how);
@@ -390,11 +445,12 @@ class FileInstance {
     return strerror_buf_;
   }
 
-  void* MMap(void* addr, size_t length, int prot, int flags, off_t offset) {
+  ScopedMMap MMap(void* addr, size_t length, int prot, int flags,
+                  off_t offset) {
     errno = 0;
-    auto rval = mmap(addr, length, prot, flags, fd_, offset);
+    auto ptr = mmap(addr, length, prot, flags, fd_, offset);
     errno_ = errno;
-    return rval;
+    return ScopedMMap(ptr, length);
   }
 
   ssize_t Truncate(off_t length) {

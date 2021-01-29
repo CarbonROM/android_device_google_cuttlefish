@@ -14,10 +14,11 @@
 // limitations under the License.
 
 cc_library_static {
-    name: "libcuttlefish_screen_connector",
+    name: "libcuttlefish_audio_connector",
     srcs: [
-        "socket_based_screen_connector.cpp",
-        "wayland_screen_connector.cpp",
+        "buffers.cpp",
+        "commands.cpp",
+        "server.cpp",
     ],
     shared_libs: [
         "libcuttlefish_fs",
@@ -28,7 +29,6 @@ cc_library_static {
     static_libs: [
         "libcuttlefish_host_config",
         "libcuttlefish_utils",
-        "libcuttlefish_wayland_server",
     ],
     defaults: ["cuttlefish_host"],
 }

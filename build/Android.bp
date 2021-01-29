@@ -57,6 +57,7 @@ cvd_host_tools = [
     "ms-tpm-20-ref",
     "newfs_msdos",
     "powerwash_cvd",
+    "restart_cvd",
     "run_cvd",
     "secure_env",
     "socket_vsock_proxy",
@@ -91,6 +92,12 @@ cvd_host_model_simulator_files = [
     "iccprofile_for_sim0_for_CtsCarrierApiTestCases.xml_host",
     "numeric_operator.xml_host",
 ]
+
+cvd_configs = [
+    "cvd_config_phone.json",
+    "cvd_config_tablet.json",
+]
+
 
 cvd_host_seccomp_policy_x86_64 = [
     "9p_device.policy_x86_64",
@@ -141,7 +148,8 @@ cvd_host_package_customization {
     multilib: {
         common: {
             deps: cvd_host_webrtc_assets +
-                cvd_host_model_simulator_files,
+                cvd_host_model_simulator_files +
+                cvd_configs,
         },
     },
 
