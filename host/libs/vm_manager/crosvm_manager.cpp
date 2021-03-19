@@ -138,7 +138,7 @@ std::vector<std::string> CrosvmManager::ConfigureGpuMode(
 
 std::vector<std::string> CrosvmManager::ConfigureBootDevices(int num_disks) {
   // TODO There is no way to control this assignment with crosvm (yet)
-  if (HostArch() == "x86_64") {
+  if (HostArch() == Arch::X86_64) {
     // crosvm has an additional PCI device for an ISA bridge
     std::stringstream stream;
     stream << std::setfill('0') << std::setw(2) << std::hex
@@ -218,6 +218,11 @@ std::vector<Command> CrosvmManager::StartCommands(
 
   if (config.protected_vm()) {
     crosvm_cmd.AddParameter("--protected-vm");
+  }
+
+  if (config.gdb_port() > 0) {
+    CHECK(config.cpus() == 1) << "CPUs must be 1 for crosvm gdb mode";
+    crosvm_cmd.AddParameter("--gdb=", config.gdb_port());
   }
 
   auto display_configs = config.display_configs();
