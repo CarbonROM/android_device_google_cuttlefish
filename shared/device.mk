@@ -169,6 +169,10 @@ SOONG_CONFIG_cvd_launch_configs += \
     cvd_config_tablet.json \
     cvd_config_tv.json \
 
+SOONG_CONFIG_cvd += grub_config
+SOONG_CONFIG_cvd_grub_config += \
+    grub.cfg \
+
 #
 # Packages for AOSP-available stuff we use from the framework
 #
@@ -466,7 +470,7 @@ PRODUCT_PACKAGES += \
 # Gatekeeper
 #
 ifeq ($(LOCAL_GATEKEEPER_PRODUCT_PACKAGE),)
-       LOCAL_GATEKEEPER_PRODUCT_PACKAGE := android.hardware.gatekeeper@1.0-service.software
+       LOCAL_GATEKEEPER_PRODUCT_PACKAGE := android.hardware.gatekeeper@1.0-service.remote
 endif
 PRODUCT_PACKAGES += \
     $(LOCAL_GATEKEEPER_PRODUCT_PACKAGE)
@@ -521,7 +525,7 @@ PRODUCT_PACKAGES += \
 # KeyMint HAL
 #
 ifeq ($(LOCAL_KEYMINT_PRODUCT_PACKAGE),)
-       LOCAL_KEYMINT_PRODUCT_PACKAGE := android.hardware.security.keymint-service
+       LOCAL_KEYMINT_PRODUCT_PACKAGE := android.hardware.security.keymint-service.remote
 endif
  PRODUCT_PACKAGES += \
     $(LOCAL_KEYMINT_PRODUCT_PACKAGE)
