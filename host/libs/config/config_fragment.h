@@ -13,25 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-#include <fruit/fruit.h>
-
-#include "common/libs/fs/shared_fd.h"
-#include "host/commands/run_cvd/process_monitor.h"
-#include "host/libs/config/cuttlefish_config.h"
+#include <json/json.h>
+#include <memory>
+#include <string>
 
 namespace cuttlefish {
 
-class ServerLoop {
+class ConfigFragment {
  public:
-  virtual ~ServerLoop();
-  virtual void Run(ProcessMonitor& process_monitor) = 0;
+  virtual ~ConfigFragment();
+
+  virtual std::string Name() const = 0;
+  virtual Json::Value Serialize() const = 0;
+  virtual bool Deserialize(const Json::Value&) = 0;
 };
 
-fruit::Component<fruit::Required<const CuttlefishConfig,
-                                 const CuttlefishConfig::InstanceSpecific>,
-                 ServerLoop>
-serverLoopComponent();
-}
+}  // namespace cuttlefish

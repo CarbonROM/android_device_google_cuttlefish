@@ -24,8 +24,10 @@
 #include "common/libs/utils/files.h"
 #include "common/libs/utils/subprocess.h"
 #include "host/commands/run_cvd/process_monitor.h"
+#include "host/commands/run_cvd/reporting.h"
 #include "host/commands/run_cvd/runner_defs.h"
 #include "host/libs/config/cuttlefish_config.h"
+#include "host/libs/config/inject.h"
 #include "host/libs/config/known_paths.h"
 
 namespace cuttlefish {
@@ -45,10 +47,17 @@ CommandSource::~CommandSource() = default;
 
 KernelLogPipeProvider::~KernelLogPipeProvider() = default;
 
-class KernelLogMonitor : public CommandSource, public KernelLogPipeProvider {
+class KernelLogMonitor : public CommandSource,
+                         public KernelLogPipeProvider,
+                         public DiagnosticInformation {
  public:
   INJECT(KernelLogMonitor(const CuttlefishConfig::InstanceSpecific& instance))
       : instance_(instance) {}
+
+  // DiagnosticInformation
+  std::vector<std::string> Diagnostics() const override {
+    return {"Kernel log: " + instance_.PerInstancePath("kernel.log")};
+  }
 
   // CommandSource
   std::vector<Command> Commands() override {
@@ -165,10 +174,14 @@ class RootCanal : public CommandSource {
   const CuttlefishConfig::InstanceSpecific& instance_;
 };
 
-class LogcatReceiver : public CommandSource {
+class LogcatReceiver : public CommandSource, public DiagnosticInformation {
  public:
   INJECT(LogcatReceiver(const CuttlefishConfig::InstanceSpecific& instance))
       : instance_(instance) {}
+  // DiagnosticInformation
+  std::vector<std::string> Diagnostics() const override {
+    return {"Logcat output: " + instance_.logcat_path()};
+  }
 
   // CommandSource
   std::vector<Command> Commands() override {
@@ -553,11 +566,19 @@ class VehicleHalServer : public CommandSource {
   const CuttlefishConfig::InstanceSpecific& instance_;
 };
 
-class ConsoleForwarder : public CommandSource {
+class ConsoleForwarder : public CommandSource, public DiagnosticInformation {
  public:
   INJECT(ConsoleForwarder(const CuttlefishConfig& config,
                           const CuttlefishConfig::InstanceSpecific& instance))
       : config_(config), instance_(instance) {}
+  // DiagnosticInformation
+  std::vector<std::string> Diagnostics() const override {
+    if (Enabled()) {
+      return {"To access the console run: screen " + instance_.console_path()};
+    } else {
+      return {"Serial console is disabled; use -console=true to enable it."};
+    }
+  }
 
   // CommandSource
   std::vector<Command> Commands() override {
@@ -620,34 +641,27 @@ class ConsoleForwarder : public CommandSource {
   SharedFD console_forwarder_out_rd_;
 };
 
-fruit::Component<fruit::Required<const CuttlefishConfig,
-                                 const CuttlefishConfig::InstanceSpecific>,
-                 KernelLogPipeProvider>
-launchComponent() {
+using PublicDeps = fruit::Required<const CuttlefishConfig,
+                                   const CuttlefishConfig::InstanceSpecific>;
+fruit::Component<PublicDeps, KernelLogPipeProvider> launchComponent() {
+  using InternalDeps = fruit::Required<const CuttlefishConfig,
+                                       const CuttlefishConfig::InstanceSpecific,
+                                       KernelLogPipeProvider>;
+  using Multi = Multibindings<InternalDeps>;
+  using Bases = Multi::Bases<CommandSource, DiagnosticInformation, Feature>;
   return fruit::createComponent()
       .bind<KernelLogPipeProvider, KernelLogMonitor>()
-      .addMultibinding<CommandSource, BluetoothConnector>()
-      .addMultibinding<CommandSource, ConfigServer>()
-      .addMultibinding<CommandSource, ConsoleForwarder>()
-      .addMultibinding<CommandSource, GnssGrpcProxyServer>()
-      .addMultibinding<CommandSource, KernelLogMonitor>()
-      .addMultibinding<CommandSource, LogcatReceiver>()
-      .addMultibinding<CommandSource, MetricsService>()
-      .addMultibinding<CommandSource, RootCanal>()
-      .addMultibinding<CommandSource, SecureEnvironment>()
-      .addMultibinding<CommandSource, TombstoneReceiver>()
-      .addMultibinding<CommandSource, VehicleHalServer>()
-      .addMultibinding<Feature, BluetoothConnector>()
-      .addMultibinding<Feature, ConfigServer>()
-      .addMultibinding<Feature, ConsoleForwarder>()
-      .addMultibinding<Feature, GnssGrpcProxyServer>()
-      .addMultibinding<Feature, KernelLogMonitor>()
-      .addMultibinding<Feature, LogcatReceiver>()
-      .addMultibinding<Feature, MetricsService>()
-      .addMultibinding<Feature, RootCanal>()
-      .addMultibinding<Feature, SecureEnvironment>()
-      .addMultibinding<Feature, TombstoneReceiver>()
-      .addMultibinding<Feature, VehicleHalServer>();
+      .install(Bases::Impls<BluetoothConnector>)
+      .install(Bases::Impls<ConfigServer>)
+      .install(Bases::Impls<ConsoleForwarder>)
+      .install(Bases::Impls<GnssGrpcProxyServer>)
+      .install(Bases::Impls<KernelLogMonitor>)
+      .install(Bases::Impls<LogcatReceiver>)
+      .install(Bases::Impls<MetricsService>)
+      .install(Bases::Impls<RootCanal>)
+      .install(Bases::Impls<SecureEnvironment>)
+      .install(Bases::Impls<TombstoneReceiver>)
+      .install(Bases::Impls<VehicleHalServer>);
 }
 
 } // namespace cuttlefish
