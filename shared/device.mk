@@ -45,6 +45,9 @@ TARGET_VULKAN_SUPPORT ?= true
 TARGET_ENABLE_HOST_BLUETOOTH_EMULATION ?= true
 TARGET_USE_BTLINUX_HAL_IMPL ?= true
 
+# TODO(b/65201432): Swiftshader needs to create executable memory.
+PRODUCT_REQUIRES_INSECURE_EXECMEM_FOR_SWIFTSHADER := true
+
 AB_OTA_UPDATER := true
 AB_OTA_PARTITIONS += \
     boot \
@@ -214,7 +217,8 @@ PRODUCT_PACKAGES += \
     libEGL_emulation \
     libGLESv2_enc \
     libGLESv2_emulation \
-    libGLESv1_enc
+    libGLESv1_enc \
+    libGoldfishProfiler \
 
 #
 # Packages for testing
