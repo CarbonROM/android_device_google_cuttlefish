@@ -192,9 +192,13 @@ DEFINE_string(webrtc_sig_server_path, "/register_device",
               "The path section of the URL where the device should be "
               "registered with the signaling server.");
 
+DEFINE_bool(webrtc_sig_server_secure, true,
+            "Whether the WebRTC signaling server uses secure protocols (WSS vs WS).");
+
 DEFINE_bool(verify_sig_server_certificate, false,
             "Whether to verify the signaling server's certificate with a "
-            "trusted signing authority (Disallow self signed certificates).");
+            "trusted signing authority (Disallow self signed certificates). "
+            "This is ignored if an insecure server is configured.");
 
 DEFINE_string(sig_server_headers_file, "",
               "Path to a file containing HTTP headers to be included in the "
@@ -276,6 +280,9 @@ DEFINE_int32(modem_simulator_sim_type, 1,
 DEFINE_bool(console, false, "Enable the serial console");
 
 DEFINE_bool(vhost_net, false, "Enable vhost acceleration of networking");
+
+DEFINE_string(vhost_user_mac80211_hwsim, "",
+              "Unix socket path for vhost-user of mac80211_hwsim");
 
 DEFINE_bool(record_screen, false, "Enable screen recording. "
                                   "Requires --start_webrtc");
@@ -594,6 +601,7 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
   tmp_config_obj.set_enable_webrtc(FLAGS_start_webrtc);
   tmp_config_obj.set_webrtc_assets_dir(FLAGS_webrtc_assets_dir);
   tmp_config_obj.set_webrtc_certs_dir(FLAGS_webrtc_certs_dir);
+  tmp_config_obj.set_sig_server_secure(FLAGS_webrtc_sig_server_secure);
   // Note: This will be overridden if the sig server is started by us
   tmp_config_obj.set_sig_server_port(FLAGS_webrtc_sig_server_port);
   tmp_config_obj.set_sig_server_address(FLAGS_webrtc_sig_server_addr);
@@ -693,6 +701,8 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
   tmp_config_obj.set_enable_minimal_mode(FLAGS_enable_minimal_mode);
 
   tmp_config_obj.set_vhost_net(FLAGS_vhost_net);
+
+  tmp_config_obj.set_vhost_user_mac80211_hwsim(FLAGS_vhost_user_mac80211_hwsim);
 
   tmp_config_obj.set_record_screen(FLAGS_record_screen);
 
