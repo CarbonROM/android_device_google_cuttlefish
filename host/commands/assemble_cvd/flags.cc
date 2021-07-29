@@ -326,6 +326,8 @@ DEFINE_bool(protected_vm, false, "Boot in Protected VM mode");
 DEFINE_bool(enable_audio, cuttlefish::HostArch() != cuttlefish::Arch::Arm64,
             "Whether to play or capture audio");
 
+DEFINE_uint32(camera_server_port, 0, "camera vsock port");
+
 DECLARE_string(assembly_dir);
 DECLARE_string(boot_image);
 DECLARE_string(system_image_dir);
@@ -533,13 +535,7 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
     LOG(FATAL) << "Invalid gpu_mode: " << FLAGS_gpu_mode;
   }
   if (tmp_config_obj.gpu_mode() == kGpuModeAuto) {
-    // TODO(b/171305898): remove this branch once HostComposer can send
-    // multiple displays.
-    if (tmp_config_obj.display_configs().size() > 1) {
-      LOG(INFO) << "Enabling --gpu_mode=guest_swiftshader due to "
-                   "multi-display.";
-      tmp_config_obj.set_gpu_mode(kGpuModeGuestSwiftshader);
-    } else if (ShouldEnableAcceleratedRendering(graphics_availability)) {
+    if (ShouldEnableAcceleratedRendering(graphics_availability)) {
       LOG(INFO) << "GPU auto mode: detected prerequisites for accelerated "
                    "rendering support.";
       if (FLAGS_vm_manager == QemuManager::name()) {
@@ -829,6 +825,7 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
     instance.set_rootcanal_default_commands_file(
         FLAGS_bluetooth_default_commands_file);
 
+    instance.set_camera_server_port(FLAGS_camera_server_port);
     instance.set_device_title(FLAGS_device_title);
 
     if (FLAGS_protected_vm) {
