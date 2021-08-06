@@ -144,7 +144,13 @@ BOARD_FLASH_BLOCK_SIZE := 512
 USE_OPENGL_RENDERER := true
 
 # Wifi.
+ifeq ($(PRODUCT_ENFORCE_MAC80211_HWSIM),true)
+BOARD_WLAN_DEVICE           := emulator
+BOARD_HOSTAPD_PRIVATE_LIB   := lib_driver_cmd_simulated_cf
+WIFI_HIDL_FEATURE_DUAL_INTERFACE := true
+else
 BOARD_WLAN_DEVICE           := wlan0
+endif
 BOARD_HOSTAPD_DRIVER        := NL80211
 BOARD_WPA_SUPPLICANT_DRIVER := NL80211
 BOARD_WPA_SUPPLICANT_PRIVATE_LIB := lib_driver_cmd_simulated_cf
@@ -220,8 +226,6 @@ BOARD_KERNEL_CMDLINE += loop.max_part=7
 # TODO(b/182417593): Move all of these module options to modules.options
 # TODO(b/176860479): Remove once goldfish and cuttlefish share a wifi implementation
 BOARD_BOOTCONFIG += kernel.mac80211_hwsim.radios=0
-# TODO(b/175151042): Remove once we are using virtio-snd on cuttlefish
-BOARD_BOOTCONFIG += kernel.snd-hda-intel.enable=0
 # Reduce slab size usage from virtio vsock to reduce slab fragmentation
 BOARD_BOOTCONFIG += \
     kernel.vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size=16384
