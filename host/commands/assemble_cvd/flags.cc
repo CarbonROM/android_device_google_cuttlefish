@@ -21,11 +21,13 @@
 
 #include "common/libs/utils/environment.h"
 #include "common/libs/utils/files.h"
+#include "common/libs/utils/flag_parser.h"
 #include "host/commands/assemble_cvd/alloc.h"
 #include "host/commands/assemble_cvd/boot_config.h"
 #include "host/commands/assemble_cvd/clean.h"
 #include "host/commands/assemble_cvd/config.h"
 #include "host/commands/assemble_cvd/disk_flags.h"
+#include "host/commands/assemble_cvd/flag_feature.h"
 #include "host/libs/config/adb_config.h"
 #include "host/libs/config/host_tools_version.h"
 #include "host/libs/graphics_detector/graphics_detector.h"
@@ -103,6 +105,7 @@ DEFINE_bool(start_vnc_server, false, "Whether to start the vnc server process. "
                                      "The VNC server runs at port 6443 + i for "
                                      "the vsoc-i user or CUTTLEFISH_INSTANCE=i, "
                                      "starting from 1.");
+
 DEFINE_bool(use_allocd, false,
             "Acquire static resources from the resource allocator daemon.");
 DEFINE_bool(enable_minimal_mode, false,
@@ -327,6 +330,8 @@ DEFINE_bool(enable_audio, cuttlefish::HostArch() != cuttlefish::Arch::Arm64,
             "Whether to play or capture audio");
 
 DEFINE_uint32(camera_server_port, 0, "camera vsock port");
+
+DEFINE_string(fs_format, "f2fs", "Set the userdata filesystem format");
 
 DECLARE_string(assembly_dir);
 DECLARE_string(boot_image);
@@ -745,6 +750,8 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
 
   tmp_config_obj.set_protected_vm(FLAGS_protected_vm);
 
+  tmp_config_obj.set_fs_format(FLAGS_fs_format);
+
   std::vector<int> num_instances;
   for (int i = 0; i < FLAGS_num_instances; i++) {
     num_instances.push_back(GetInstance() + i);
@@ -797,6 +804,7 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
     instance.set_vnc_server_port(6444 + num - 1);
     instance.set_adb_host_port(6520 + num - 1);
     instance.set_adb_ip_and_port("0.0.0.0:" + std::to_string(6520 + num - 1));
+    instance.set_confui_host_vsock_port(7700 + num - 1);
     instance.set_tombstone_receiver_port(calc_vsock_port(6600));
     instance.set_vehicle_hal_server_port(9210 + num - 1);
     instance.set_audiocontrol_server_port(9410);  /* OK to use the same port number across instances */
@@ -927,17 +935,11 @@ void SetDefaultFlagsForCrosvm() {
     SetCommandLineOptionWithMode("start_webrtc", "true", SET_FLAGS_DEFAULT);
   }
 
-  bool default_enable_sandbox = false;
   std::set<Arch> supported_archs{Arch::X86_64};
-  if (supported_archs.find(HostArch()) != supported_archs.end()) {
-    if (DirectoryExists(kCrosvmVarEmptyDir)) {
-      default_enable_sandbox = IsDirectoryEmpty(kCrosvmVarEmptyDir);
-    } else if (FileExists(kCrosvmVarEmptyDir)) {
-      default_enable_sandbox = false;
-    } else {
-      default_enable_sandbox = EnsureDirectoryExists(kCrosvmVarEmptyDir);
-    }
-  }
+  bool default_enable_sandbox =
+      supported_archs.find(HostArch()) != supported_archs.end() &&
+      EnsureDirectoryExists(kCrosvmVarEmptyDir) &&
+      IsDirectoryEmpty(kCrosvmVarEmptyDir) && !IsRunningInContainer();
   SetCommandLineOptionWithMode("enable_sandbox",
                                (default_enable_sandbox ? "true" : "false"),
                                SET_FLAGS_DEFAULT);
@@ -947,10 +949,55 @@ void SetDefaultFlagsForCrosvm() {
                                SET_FLAGS_DEFAULT);
 }
 
-bool ParseCommandLineFlags(int* argc, char*** argv, KernelConfig* kernel_config) {
-  google::ParseCommandLineNonHelpFlags(argc, argv, true);
+fruit::Component<> FlagsComponent() {
+  return fruit::createComponent().install(GflagsComponent);
+}
+
+bool ParseCommandLineFlags(std::vector<std::string>& args,
+                           KernelConfig* kernel_config) {
+  bool help = false;
+  std::string help_str;
+  bool helpxml = false;
+
+  std::vector<Flag> help_flags = {
+      GflagsCompatFlag("help", help),
+      GflagsCompatFlag("helpfull", help),
+      GflagsCompatFlag("helpshort", help),
+      GflagsCompatFlag("helpmatch", help_str),
+      GflagsCompatFlag("helpon", help_str),
+      GflagsCompatFlag("helppackage", help_str),
+      GflagsCompatFlag("helpxml", helpxml),
+  };
+  for (const auto& help_flag : help_flags) {
+    if (!help_flag.Parse(args)) {
+      LOG(ERROR) << "Failed to process help flag.";
+      return false;
+    }
+  }
+
+  fruit::Injector<> injector(FlagsComponent);
+  auto flag_features = injector.getMultibindings<FlagFeature>();
+  if (!FlagFeature::ProcessFlags(flag_features, args)) {
+    LOG(ERROR) << "Failed to parse flags.";
+    return false;
+  }
+
   SetDefaultFlagsFromConfigPreset();
-  google::HandleCommandLineHelpFlags();
+
+  if (help || help_str != "") {
+    LOG(WARNING) << "TODO(schuffelen): Implement `--help` for assemble_cvd.";
+    LOG(WARNING) << "In the meantime, call `launch_cvd --help`";
+    return false;
+  } else if (helpxml) {
+    if (!FlagFeature::WriteGflagsHelpXml(flag_features, std::cout)) {
+      LOG(ERROR) << "Failure in writing gflags helpxml output";
+    }
+    std::exit(1);  // For parity with gflags
+  }
+  // TODO(schuffelen): Put in "unknown flag" guards after gflags is removed.
+  // gflags either consumes all arguments that start with - or leaves all of
+  // them in place, and either errors out on unknown flags or accepts any flags.
+
   bool invalid_manager = false;
 
   if (!ResolveInstanceFiles()) {
