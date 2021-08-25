@@ -9,6 +9,8 @@
 
 #include "host/libs/config/mbr.h"
 
+#include "blkid.h"
+
 namespace cuttlefish {
 
 namespace {
@@ -35,11 +37,16 @@ const std::pair<std::string, std::string> kGrubBlobTable[] = {
     {"/usr/lib/grub/arm64-efi/monolithic/grubaa64.efi", kBootPathAA64},
 };
 
-bool ForceFsckImage(const char* data_image) {
-  auto fsck_path = HostBinaryPath("fsck.f2fs");
+bool ForceFsckImage(const CuttlefishConfig& config, const char* data_image) {
+  std::string fsck_path;
+  if (config.userdata_format() == "f2fs") {
+    fsck_path = HostBinaryPath("fsck.f2fs");
+  } else if (config.userdata_format() == "ext4") {
+    fsck_path = "/sbin/e2fsck";
+  }
   int fsck_status = execute({fsck_path, "-y", "-f", data_image});
   if (fsck_status & ~(FSCK_ERROR_CORRECTED|FSCK_ERROR_CORRECTED_REQUIRES_REBOOT)) {
-    LOG(ERROR) << "`fsck.f2fs -y -f " << data_image << "` failed with code "
+    LOG(ERROR) << "`" << fsck_path << " -y -f " << data_image << "` failed with code "
                << fsck_status;
     return false;
   }
@@ -77,7 +84,8 @@ bool NewfsMsdos(const std::string& data_image, int data_image_mb,
                          data_image}) == 0;
 }
 
-bool ResizeImage(const char* data_image, int data_image_mb) {
+bool ResizeImage(const CuttlefishConfig& config,
+                 const char* data_image, int data_image_mb) {
   auto file_mb = FileSize(data_image) >> 20;
   if (file_mb > data_image_mb) {
     LOG(ERROR) << data_image << " is already " << file_mb << " MB, will not "
@@ -94,18 +102,23 @@ bool ResizeImage(const char* data_image, int data_image_mb) {
                   << data_image << "` failed:" << fd->StrError();
       return false;
     }
-    bool fsck_success = ForceFsckImage(data_image);
+    bool fsck_success = ForceFsckImage(config, data_image);
     if (!fsck_success) {
       return false;
     }
-    auto resize_path = HostBinaryPath("resize.f2fs");
+    std::string resize_path;
+    if (config.userdata_format() == "f2fs") {
+      resize_path = HostBinaryPath("resize.f2fs");
+    } else if (config.userdata_format() == "ext4") {
+      resize_path = "/sbin/resize2fs";
+    }
     int resize_status = execute({resize_path, data_image});
     if (resize_status != 0) {
-      LOG(ERROR) << "`resize.f2fs " << data_image << "` failed with code "
+      LOG(ERROR) << "`" << resize_path << " " << data_image << "` failed with code "
                  << resize_status;
       return false;
     }
-    fsck_success = ForceFsckImage(data_image);
+    fsck_success = ForceFsckImage(config, data_image);
     if (!fsck_success) {
       return false;
     }
@@ -114,7 +127,7 @@ bool ResizeImage(const char* data_image, int data_image_mb) {
 }
 } // namespace
 
-void CreateBlankImage(
+bool CreateBlankImage(
     const std::string& image, int num_mb, const std::string& image_fmt) {
   LOG(DEBUG) << "Creating " << image;
 
@@ -126,23 +139,29 @@ void CreateBlankImage(
     if (fd->Truncate(image_size_bytes) != 0) {
       LOG(ERROR) << "`truncate --size=" << num_mb << "M " << image
                  << "` failed:" << fd->StrError();
-      return;
+      return false;
     }
   }
 
   if (image_fmt == "ext4") {
-    execute({"/sbin/mkfs.ext4", image});
+    if (execute({"/sbin/mkfs.ext4", image}) != 0) {
+      return false;
+    }
   } else if (image_fmt == "f2fs") {
     auto make_f2fs_path = cuttlefish::HostBinaryPath("make_f2fs");
-    execute({make_f2fs_path, "-t", image_fmt, image, "-C", "utf8", "-O",
-             "compression,extra_attr,prjquota", "-g", "android"});
+    if (execute({make_f2fs_path, "-t", image_fmt, image, "-C", "utf8", "-O",
+             "compression,extra_attr,project_quota", "-g", "android"}) != 0) {
+      return false;
+    }
   } else if (image_fmt == "sdcard") {
     // Reserve 1MB in the image for the MBR and padding, to simulate what
     // other OSes do by default when partitioning a drive
     off_t offset_size_bytes = 1 << 20;
     image_size_bytes -= offset_size_bytes;
-    CHECK(NewfsMsdos(image, num_mb, 1) == true)
-        << "Failed to create SD-Card filesystem";
+    if (!NewfsMsdos(image, num_mb, 1)) {
+      LOG(ERROR) << "Failed to create SD-Card filesystem";
+      return false;
+    }
     // Write the MBR after the filesystem is formatted, as the formatting tools
     // don't consistently preserve the image contents
     MasterBootRecord mbr = {
@@ -156,12 +175,39 @@ void CreateBlankImage(
     auto fd = SharedFD::Open(image, O_RDWR);
     if (WriteAllBinary(fd, &mbr) != sizeof(MasterBootRecord)) {
       LOG(ERROR) << "Writing MBR to " << image << " failed:" << fd->StrError();
-      return;
+      return false;
     }
   } else if (image_fmt != "none") {
     LOG(WARNING) << "Unknown image format '" << image_fmt
                  << "' for " << image << ", treating as 'none'.";
   }
+  return true;
+}
+
+std::string GetFsType(const std::string& path) {
+  std::string fs_type;
+  blkid_cache cache;
+  if (blkid_get_cache(&cache, NULL) < 0) {
+    LOG(INFO) << "blkid_get_cache failed";
+    return fs_type;
+  }
+  blkid_dev dev = blkid_get_dev(cache, path.c_str(), BLKID_DEV_NORMAL);
+  if (!dev) {
+    LOG(INFO) << "blkid_get_dev failed";
+    blkid_put_cache(cache);
+    return fs_type;
+  }
+
+  const char *type, *value;
+  blkid_tag_iterate iter = blkid_tag_iterate_begin(dev);
+  while (blkid_tag_next(iter, &type, &value) == 0) {
+    if (!strcmp(type, "TYPE")) {
+      fs_type = value;
+    }
+  }
+  blkid_tag_iterate_end(iter);
+  blkid_put_cache(cache);
+  return fs_type;
 }
 
 DataImageResult ApplyDataImagePolicy(const CuttlefishConfig& config,
@@ -170,6 +216,19 @@ DataImageResult ApplyDataImagePolicy(const CuttlefishConfig& config,
   bool remove{};
   bool create{};
   bool resize{};
+  bool change_format{};
+  std::string fs_type;
+  int file_mb = config.blank_data_image_mb();
+
+  if (data_exists) {
+    fs_type = GetFsType(data_image);
+    if (fs_type != config.userdata_format()) {
+      change_format = true;
+      if (file_mb <= 0) {
+        file_mb = FileSize(data_image) >> 20;
+      }
+    }
+  }
 
   if (config.data_policy() == kDataPolicyUseExisting) {
     if (!data_exists) {
@@ -193,6 +252,11 @@ DataImageResult ApplyDataImagePolicy(const CuttlefishConfig& config,
     remove = false;
     resize = false;
   } else if (config.data_policy() == kDataPolicyResizeUpTo) {
+    if (change_format) {
+      LOG(ERROR) << "You should NOT change the fs format with -data_policy="
+                 << kDataPolicyResizeUpTo;
+      return DataImageResult::Error;
+    }
     create = false;
     remove = false;
     resize = true;
@@ -205,20 +269,22 @@ DataImageResult ApplyDataImagePolicy(const CuttlefishConfig& config,
     RemoveFile(data_image.c_str());
   }
 
-  if (create) {
-    if (config.blank_data_image_mb() <= 0) {
+  if (create || change_format) {
+    if (file_mb <= 0) {
       LOG(ERROR) << "-blank_data_image_mb is required to create data image";
       return DataImageResult::Error;
     }
-    CreateBlankImage(data_image.c_str(), config.blank_data_image_mb(),
-                     config.blank_data_image_fmt());
+    if (!CreateBlankImage(data_image.c_str(), file_mb,
+                          config.userdata_format())) {
+      return DataImageResult::Error;
+    }
     return DataImageResult::FileUpdated;
   } else if (resize) {
     if (!data_exists) {
       LOG(ERROR) << data_image << " does not exist, but resizing was requested";
       return DataImageResult::Error;
     }
-    bool success = ResizeImage(data_image.c_str(), config.blank_data_image_mb());
+    bool success = ResizeImage(config, data_image.c_str(), file_mb);
     return success ? DataImageResult::FileUpdated : DataImageResult::Error;
   } else {
     LOG(DEBUG) << data_image << " exists. Not creating it.";
@@ -235,7 +301,9 @@ bool InitializeMiscImage(const std::string& misc_image) {
   }
 
   LOG(DEBUG) << "misc partition image: creating empty";
-  CreateBlankImage(misc_image, 1 /* mb */, "none");
+  if (!CreateBlankImage(misc_image, 1 /* mb */, "none")) {
+    return false;
+  }
   return true;
 }
 
