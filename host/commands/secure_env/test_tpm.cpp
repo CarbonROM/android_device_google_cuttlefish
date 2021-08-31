@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 The Android Open Source Project
+ * Copyright (C) 2021 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,23 @@
  * limitations under the License.
  */
 
-#pragma once
+#include "host/commands/secure_env/test_tpm.h"
 
-#include <cstddef>
-#include <string>
+#include <android-base/logging.h>
+#include <tss2/tss2_rc.h>
 
 namespace cuttlefish {
 
-std::string TpmCommandName(std::uint32_t command_num);
-
+TestTpm::TestTpm() {
+  auto rc = Esys_Initialize(&esys_, tpm_.TctiContext(), nullptr);
+  if (rc != TPM2_RC_SUCCESS) {
+    LOG(FATAL) << "Could not initialize esys: " << Tss2_RC_Decode(rc) << " ("
+               << rc << ")";
+  }
 }
+
+TestTpm::~TestTpm() { Esys_Finalize(&esys_); }
+
+ESYS_CONTEXT* TestTpm::Esys() { return esys_; }
+
+}  // namespace cuttlefish
