@@ -205,8 +205,8 @@ void WebSocketServer::RegisterHandlerFactory(
 
 void WebSocketServer::RegisterDynHandlerFactory(
     const std::string& path,
-    std::unique_ptr<DynHandlerFactory> handler_factory_p) {
-  dyn_handler_factories_[path] = std::move(handler_factory_p);
+    DynHandlerFactory handler_factory) {
+  dyn_handler_factories_[path] = std::move(handler_factory);
 }
 
 void WebSocketServer::Serve() {
@@ -256,6 +256,13 @@ int WebSocketServer::DynServerCallback(struct lws* wsi,
       }
       std::string path(path_raw, path_len);
       auto handler = InstantiateDynHandler(path, wsi);
+      if (!handler) {
+        if (!WriteCommonHttpHeaders(static_cast<int>(HttpStatusCode::NotFound),
+                                    "application/json", 0, wsi)) {
+          return 1;
+        }
+        return lws_http_transaction_completed(wsi);
+      }
       dyn_handlers_[wsi] = std::move(handler);
       switch (method) {
         case LWSHUMETH_GET: {
@@ -397,7 +404,7 @@ std::unique_ptr<DynHandler> WebSocketServer::InstantiateDynHandler(
     return nullptr;
   } else {
     LOG(VERBOSE) << "Creating handler for " << uri_path;
-    return it->second->Build(wsi);
+    return it->second(wsi);
   }
 }
 
