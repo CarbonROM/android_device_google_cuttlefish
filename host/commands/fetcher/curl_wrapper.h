@@ -15,31 +15,40 @@
 
 #pragma once
 
+#include <chrono>
+#include <mutex>
 #include <string>
 
-#include <curl/curl.h>
 #include <json/json.h>
 
 namespace cuttlefish {
 
-class CurlWrapper {
-  CURL* curl;
-public:
-  CurlWrapper();
-  ~CurlWrapper();
-  CurlWrapper(const CurlWrapper&) = delete;
-  CurlWrapper& operator=(const CurlWrapper*) = delete;
-  CurlWrapper(CurlWrapper&&) = default;
+template <typename T>
+struct CurlResponse {
+  bool HttpInfo() { return http_code >= 100 && http_code <= 199; }
+  bool HttpSuccess() { return http_code >= 200 && http_code <= 299; }
+  bool HttpRedirect() { return http_code >= 300 && http_code <= 399; }
+  bool HttpClientError() { return http_code >= 400 && http_code <= 499; }
+  bool HttpServerError() { return http_code >= 500 && http_code <= 599; }
 
-  bool DownloadToFile(const std::string& url, const std::string& path);
-  bool DownloadToFile(const std::string& url, const std::string& path,
-                      const std::vector<std::string>& headers);
-  std::string DownloadToString(const std::string& url);
-  std::string DownloadToString(const std::string& url,
-                               const std::vector<std::string>& headers);
-  Json::Value DownloadToJson(const std::string& url);
-  Json::Value DownloadToJson(const std::string& url,
-                             const std::vector<std::string>& headers);
+  T data;
+  long http_code;
+};
+
+class CurlWrapper {
+ public:
+  static std::unique_ptr<CurlWrapper> Create();
+  static std::unique_ptr<CurlWrapper> WithServerErrorRetry(
+      CurlWrapper&, int retry_attempts, std::chrono::milliseconds retry_delay);
+  virtual ~CurlWrapper();
+
+  virtual CurlResponse<std::string> DownloadToFile(
+      const std::string& url, const std::string& path,
+      const std::vector<std::string>& headers = {}) = 0;
+  virtual CurlResponse<std::string> DownloadToString(
+      const std::string& url, const std::vector<std::string>& headers = {}) = 0;
+  virtual CurlResponse<Json::Value> DownloadToJson(
+      const std::string& url, const std::vector<std::string>& headers = {}) = 0;
 };
 
 }
