@@ -53,6 +53,8 @@ HostServer::HostServer(
       screen_connector_{screen_connector},
       renderer_(display_num_),
       hal_vsock_port_(HalHostVsockPort()) {
+  ConfUiLog(DEBUG) << "Confirmation UI Host session is listening on: "
+                   << hal_vsock_port_;
   const size_t max_elements = 20;
   auto ignore_new =
       [](ThreadSafeQueue<std::unique_ptr<ConfUiMessage>>::QueueImpl*) {
@@ -176,7 +178,7 @@ SharedFD HostServer::EstablishHalConnection() {
     // from HAL or from all webrtc/vnc clients
     // if no input, sleep until there is
     auto input_ptr = input_multiplexer_.Pop();
-    auto& input = *(input_ptr.get());
+    auto& input = *input_ptr;
     const auto session_id = input.GetSessionId();
     const auto cmd = input.GetType();
     const std::string cmd_str(ToString(cmd));
@@ -224,7 +226,7 @@ static bool IsUserAbort(ConfUiMessage& msg) {
 }
 
 void HostServer::Transition(std::unique_ptr<ConfUiMessage>& input_ptr) {
-  auto& input = *(input_ptr.get());
+  auto& input = *input_ptr;
   const auto session_id = input.GetSessionId();
   const auto cmd = input.GetType();
   const std::string cmd_str(ToString(cmd));
