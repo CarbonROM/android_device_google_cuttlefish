@@ -91,6 +91,9 @@ class CuttlefishConfig {
   std::string gpu_mode() const;
   void set_gpu_mode(const std::string& name);
 
+  std::string gpu_capture_binary() const;
+  void set_gpu_capture_binary(const std::string&);
+
   int cpus() const;
   void set_cpus(int cpus);
 
@@ -446,6 +449,9 @@ class CuttlefishConfig {
     // Whether this instance should start the wmediumd process
     bool start_wmediumd() const;
 
+    // Whether this instance should start an ap instance
+    bool start_ap() const;
+
     // Wifi MAC address inside the guest
     int wifi_mac_prefix() const;
 
@@ -503,6 +509,7 @@ class CuttlefishConfig {
     void set_webrtc_device_id(const std::string& id);
     void set_start_webrtc_signaling_server(bool start);
     void set_start_wmediumd(bool start);
+    void set_start_ap(bool start);
     // Wifi MAC address inside the guest
     void set_wifi_mac_prefix(const int wifi_mac_prefix);
     // Gnss grpc proxy server port inside the host
