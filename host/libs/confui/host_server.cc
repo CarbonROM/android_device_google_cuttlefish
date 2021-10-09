@@ -99,55 +99,43 @@ void HostServer::HalCmdFetcherLoop() {
       is_socket_ok_ = false;
       continue;
     }
+    /*
+     * In case of Vts test, the msg could be a user input. For now, we do not
+     * enforce the input grace period for Vts. However, if ever we do, here is
+     * where the time point check should happen. Once it is enqueued, it is not
+     * always guaranteed to be picked up reasonably soon.
+     */
     input_multiplexer_.Push(hal_cmd_q_id_, std::move(msg));
   }
 }
 
-bool HostServer::SendUserSelection(UserResponse::type selection) {
-  if (!curr_session_) {
-    ConfUiLog(FATAL) << "Current session must not be null";
-    return false;
-  }
-  if (curr_session_->GetState() != MainLoopState::kInSession) {
+void HostServer::SendUserSelection(std::unique_ptr<ConfUiMessage>& input) {
+  if (!curr_session_ ||
+      curr_session_->GetState() != MainLoopState::kInSession ||
+      !curr_session_->IsReadyForUserInput()) {
     // ignore
-    return true;
+    return;
   }
-  std::lock_guard<std::mutex> lock(input_socket_mtx_);
-  if (selection != UserResponse::kConfirm &&
-      selection != UserResponse::kCancel &&
-      selection != UserResponse::kUserAbort) {
-    ConfUiLog(FATAL) << selection << " must be either "
-                     << UserResponse::kConfirm << " or "
-                     << UserResponse::kCancel << " or "
-                     << UserResponse::kUserAbort;
-    return false;  // not reaching here
-  }
-
-  auto input = CreateFromUserSelection(GetCurrentSessionId(), selection);
-
   input_multiplexer_.Push(user_input_evt_q_id_, std::move(input));
-  return true;
 }
 
-void HostServer::PressConfirmButton(const bool is_down) {
-  if (!is_down) {
+void HostServer::TouchEvent(const int x, const int y, const bool is_down) {
+  if (!is_down || !curr_session_) {
     return;
   }
-  // shared by N vnc/webRTC clients
-  SendUserSelection(UserResponse::kConfirm);
-}
-
-void HostServer::PressCancelButton(const bool is_down) {
-  if (!is_down) {
-    return;
-  }
-  // shared by N vnc/webRTC clients
-  SendUserSelection(UserResponse::kCancel);
+  std::unique_ptr<ConfUiMessage> input =
+      std::make_unique<ConfUiUserTouchMessage>(GetCurrentSessionId(), x, y);
+  SendUserSelection(input);
 }
 
 void HostServer::UserAbortEvent() {
-  // shared by N vnc/webRTC clients
-  SendUserSelection(UserResponse::kUserAbort);
+  if (!curr_session_) {
+    return;
+  }
+  std::unique_ptr<ConfUiMessage> input =
+      std::make_unique<ConfUiUserSelectionMessage>(GetCurrentSessionId(),
+                                                   UserResponse::kUserAbort);
+  SendUserSelection(input);
 }
 
 bool HostServer::IsConfUiActive() {
@@ -183,7 +171,8 @@ SharedFD HostServer::EstablishHalConnection() {
     const std::string cmd_str(ToString(cmd));
 
     // take input for the Finite States Machine below
-    const bool is_user_input = (cmd == ConfUiCmd::kUserInputEvent);
+    const bool is_user_input = (cmd == ConfUiCmd::kUserInputEvent) ||
+                               (cmd == ConfUiCmd::kUserTouchEvent);
     std::string src = is_user_input ? "input" : "hal";
     ConfUiLog(VERBOSE) << "In Session " << GetCurrentSessionId() << ", "
                        << "in state " << GetCurrentState() << ", "
@@ -199,6 +188,20 @@ SharedFD HostServer::EstablishHalConnection() {
       // the session is created as kInit
       curr_session_ = CreateSession(input.GetSessionId());
     }
+    if (cmd == ConfUiCmd::kUserTouchEvent) {
+      ConfUiUserTouchMessage& touch_event =
+          static_cast<ConfUiUserTouchMessage&>(input);
+      auto [x, y] = touch_event.GetLocation();
+      const bool is_confirm = curr_session_->IsConfirm(x, y);
+      const bool is_cancel = curr_session_->IsCancel(x, y);
+      if (!is_confirm && !is_cancel) {
+        // ignore, take the next input
+        continue;
+      }
+      input_ptr = std::make_unique<ConfUiUserSelectionMessage>(
+          GetCurrentSessionId(),
+          (is_confirm ? UserResponse::kConfirm : UserResponse::kCancel));
+    }
     Transition(input_ptr);
 
     // finalize
@@ -210,8 +213,8 @@ SharedFD HostServer::EstablishHalConnection() {
   }  // end of the infinite while loop
 }
 
-std::unique_ptr<Session> HostServer::CreateSession(const std::string& name) {
-  return std::make_unique<Session>(name, display_num_, host_mode_ctrl_,
+std::shared_ptr<Session> HostServer::CreateSession(const std::string& name) {
+  return std::make_shared<Session>(name, display_num_, host_mode_ctrl_,
                                    screen_connector_);
 }
 
