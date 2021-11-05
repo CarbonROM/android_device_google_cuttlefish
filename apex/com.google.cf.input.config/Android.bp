@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,30 +16,22 @@ package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
-prebuilt_etc {
-    name: "com.google.cf.bt.rc",
-    src: "com.google.cf.bt.rc",
-    installable: false,
-}
-
 apex {
-    name: "com.google.cf.bt",
-    manifest: "manifest.json",
-    file_contexts: "file_contexts",
+    name: "com.google.cf.input.config",
+    // InputDevice expects input config files in /apex/com.android.input.config/etc
+    apex_name: "com.android.input.config",
+    manifest: "apex_manifest.json",
     key: "com.google.cf.apex.key",
     certificate: ":com.google.cf.apex.certificate",
+    file_contexts: "file_contexts",
     use_vndk_as_stable: true,
     updatable: false,
+    // Install the apex in /vendor/apex
     soc_specific: true,
-    binaries: [
-        "android.hardware.bluetooth@1.1-service.btlinux",
-        "bt_vhci_forwarder",
-    ],
     prebuilts: [
-        "android.hardware.bluetooth_le.prebuilt.xml",
-        "android.hardware.bluetooth.prebuilt.xml",
-        "com.google.cf.bt.rc",
+        "Crosvm_Virtio_Multitouch_Touchscreen_0.idc",
+        "Crosvm_Virtio_Multitouch_Touchscreen_1.idc",
+        "Crosvm_Virtio_Multitouch_Touchscreen_2.idc",
+        "Crosvm_Virtio_Multitouch_Touchscreen_3.idc",
     ],
-    init_rc: ["com.google.cf.bt.trig.rc"],
-    vintf_fragments: [":manifest_android.hardware.bluetooth@1.1-service.xml"],
 }

@@ -85,6 +85,36 @@ bool Stop() {
   return true;
 }
 
+std::pair<int,int> GetQemuVersion(const std::string& qemu_binary)
+{
+  Command qemu_version_cmd(qemu_binary);
+  qemu_version_cmd.AddParameter("-version");
+
+  std::string qemu_version_input, qemu_version_output, qemu_version_error;
+  cuttlefish::SubprocessOptions options;
+  options.Verbose(false);
+  int qemu_version_ret =
+      cuttlefish::RunWithManagedStdio(std::move(qemu_version_cmd),
+                                      &qemu_version_input,
+                                      &qemu_version_output,
+                                      &qemu_version_error, options);
+  if (qemu_version_ret != 0) {
+    LOG(FATAL) << qemu_binary << " -version returned unexpected response "
+               << qemu_version_output << ". Stderr was " << qemu_version_error;
+    return { 0, 0 };
+  }
+
+  // Snip around the extra text we don't care about
+  qemu_version_output.erase(0, std::string("QEMU emulator version ").length());
+  auto space_pos = qemu_version_output.find(" ", 0);
+  if (space_pos != std::string::npos) {
+    qemu_version_output.resize(space_pos);
+  }
+
+  auto qemu_version_bits = android::base::Split(qemu_version_output, ".");
+  return { std::stoi(qemu_version_bits[0]), std::stoi(qemu_version_bits[1]) };
+}
+
 }  // namespace
 
 QemuManager::QemuManager(Arch arch) : arch_(arch) {}
@@ -165,6 +195,8 @@ std::vector<Command> QemuManager::StartCommands(
       qemu_binary += "/qemu-system-x86_64";
       break;
   }
+
+  auto qemu_version = GetQemuVersion(qemu_binary);
   Command qemu_cmd(qemu_binary, stop);
 
   int hvc_num = 0;
@@ -232,6 +264,7 @@ std::vector<Command> QemuManager::StartCommands(
   };
 
   bool is_arm = arch_ == Arch::Arm || arch_ == Arch::Arm64;
+  bool is_arm64 = arch_ == Arch::Arm64;
 
   auto access_kregistry_size_bytes = 0;
   if (FileExists(instance.access_kregistry_path())) {
@@ -253,8 +286,22 @@ std::vector<Command> QemuManager::StartCommands(
   qemu_cmd.AddParameter("guest=", instance.instance_name(), ",debug-threads=on");
 
   qemu_cmd.AddParameter("-machine");
-  auto machine = is_arm ? "virt,gic-version=2,mte=on"
-                        : "pc-i440fx-2.8,accel=kvm,nvdimm=on";
+  std::string machine = is_arm ? "virt" : "pc-i440fx-2.8,nvdimm=on";
+  if (IsHostCompatible(arch_)) {
+    machine += ",accel=kvm";
+    if (is_arm) {
+      machine += ",gic-version=3";
+    }
+  } else if (is_arm) {
+    // QEMU doesn't support GICv3 with TCG yet
+    machine += ",gic-version=2";
+    if (is_arm64) {
+      // Only enable MTE in TCG mode. We haven't started to run on ARMv8/ARMv9
+      // devices with KVM and MTE, so MTE will always require TCG
+      machine += ",mte=on";
+    }
+    CHECK(config.cpus() <= 8) << "CPUs must be no more than 8 with GICv2";
+  }
   qemu_cmd.AddParameter(machine, ",usb=off,dump-guest-core=off");
 
   qemu_cmd.AddParameter("-m");
@@ -467,8 +514,10 @@ std::vector<Command> QemuManager::StartCommands(
   auto display_config = display_configs[0];
 
   qemu_cmd.AddParameter("-device");
-  qemu_cmd.AddParameter("virtio-gpu-pci,id=gpu0,"
-                        "xres=", display_config.width, ",yres=", display_config.height);
+  qemu_cmd.AddParameter(qemu_version.first < 6 ?
+                            "virtio-gpu-pci" : "virtio-gpu-gl-pci", ",id=gpu0",
+                        ",xres=", display_config.width,
+                        ",yres=", display_config.height);
 
   qemu_cmd.AddParameter("-cpu");
   qemu_cmd.AddParameter(IsHostCompatible(arch_) ? "host" : "max");
