@@ -78,6 +78,7 @@ DEFINE_int32(blank_metadata_image_mb, 16,
 DEFINE_int32(blank_sdcard_image_mb, 2048,
              "If enabled, the size of the blank sdcard image to generate, MB.");
 
+DECLARE_string(ap_rootfs_image);
 DECLARE_string(bootloader);
 DECLARE_bool(use_sdcard);
 DECLARE_string(initramfs_path);
@@ -131,7 +132,16 @@ bool ResolveInstanceFiles() {
 
   return true;
 }
-
+void create_overlay_image(const CuttlefishConfig& config,
+                          std::string overlay_path) {
+  bool missingOverlay = !FileExists(overlay_path);
+  bool newOverlay = FileModificationTime(overlay_path) <
+                    FileModificationTime(config.os_composite_disk_path());
+  if (missingOverlay || !FLAGS_resume || newOverlay) {
+    CreateQcowOverlay(config.crosvm_binary(), config.os_composite_disk_path(),
+                      overlay_path);
+  }
+}
 std::vector<ImagePartition> os_composite_disk_config() {
   std::vector<ImagePartition> partitions;
   partitions.push_back(ImagePartition{
@@ -204,6 +214,13 @@ std::vector<ImagePartition> os_composite_disk_config() {
     partitions.push_back(ImagePartition{
         .label = "otheros_root",
         .image_file_path = FLAGS_otheros_root_image,
+        .read_only = true,
+    });
+  }
+  if (!FLAGS_ap_rootfs_image.empty()) {
+    partitions.push_back(ImagePartition{
+        .label = "ap_rootfs",
+        .image_file_path = FLAGS_ap_rootfs_image,
         .read_only = true,
     });
   }
@@ -604,6 +621,37 @@ class InitializeSdCard : public Feature {
   const CuttlefishConfig::InstanceSpecific& instance_;
 };
 
+class InitializeFactoryResetProtected : public Feature {
+ public:
+  INJECT(InitializeFactoryResetProtected(
+      const CuttlefishConfig& config,
+      const CuttlefishConfig::InstanceSpecific& instance))
+      : config_(config), instance_(instance) {}
+
+  // Feature
+  std::string Name() const override { return "InitializeSdCard"; }
+  bool Enabled() const override { return !config_.protected_vm(); }
+
+ private:
+  std::unordered_set<Feature*> Dependencies() const override { return {}; }
+  bool Setup() {
+    if (FileExists(instance_.factory_reset_protected_path())) {
+      return true;
+    }
+    bool success = CreateBlankImage(instance_.factory_reset_protected_path(),
+                                    1 /* mb */, "none");
+    if (!success) {
+      LOG(ERROR) << "Failed to create FRP \""
+                 << instance_.factory_reset_protected_path() << "\"";
+      return false;
+    }
+    return true;
+  }
+
+  const CuttlefishConfig& config_;
+  const CuttlefishConfig::InstanceSpecific& instance_;
+};
+
 static fruit::Component<> DiskChangesComponent(const FetcherConfig* fetcher,
                                                const CuttlefishConfig* config) {
   return fruit::createComponent()
@@ -614,10 +662,7 @@ static fruit::Component<> DiskChangesComponent(const FetcherConfig* fetcher,
       .install(FixedMiscImagePathComponent, &FLAGS_misc_image)
       .install(InitializeMiscImageComponent)
       .install(FixedDataImagePathComponent, &FLAGS_data_image)
-      .install(InitializeDataImageComponent)
-      // Create esp if necessary
-      .install(InitializeEspImageComponent, &FLAGS_otheros_esp_image,
-               &FLAGS_otheros_kernel_path, &FLAGS_otheros_initramfs_path);
+      .install(InitializeDataImageComponent);
 }
 
 static fruit::Component<> DiskChangesPerInstanceComponent(
@@ -630,6 +675,7 @@ static fruit::Component<> DiskChangesPerInstanceComponent(
       .addMultibinding<Feature, InitializeAccessKregistryImage>()
       .addMultibinding<Feature, InitializePstore>()
       .addMultibinding<Feature, InitializeSdCard>()
+      .addMultibinding<Feature, InitializeFactoryResetProtected>()
       .install(InitBootloaderEnvPartitionComponent);
 }
 
@@ -641,6 +687,13 @@ void CreateDynamicDiskFiles(const FetcherConfig& fetcher_config,
 
   const auto& features = injector.getMultibindings<Feature>();
   CHECK(Feature::RunSetup(features)) << "Failed to run feature setup.";
+
+  // Create esp if necessary
+  if (!FLAGS_otheros_root_image.empty()) {
+    CHECK(InitializeEspImage(FLAGS_otheros_esp_image, FLAGS_otheros_kernel_path,
+                             FLAGS_otheros_initramfs_path))
+        << "Failed to create esp image";
+  }
 
   for (const auto& instance : config.Instances()) {
     fruit::Injector<> instance_injector(DiskChangesPerInstanceComponent,
@@ -657,11 +710,6 @@ void CreateDynamicDiskFiles(const FetcherConfig& fetcher_config,
   // support.
   if (!FLAGS_protected_vm) {
     for (const auto& instance : config.Instances()) {
-      const auto frp = instance.factory_reset_protected_path();
-      if (!FileExists(frp)) {
-        CreateBlankImage(frp, 1 /* mb */, "none");
-      }
-
       GeneratePersistentBootconfig(config, instance);
     }
   }
@@ -725,13 +773,10 @@ void CreateDynamicDiskFiles(const FetcherConfig& fetcher_config,
 
   if (!FLAGS_protected_vm) {
     for (auto instance : config.Instances()) {
-      auto overlay_path = instance.PerInstancePath("overlay.img");
-      bool missingOverlay = !FileExists(overlay_path);
-      bool newOverlay = FileModificationTime(overlay_path) <
-                        FileModificationTime(config.os_composite_disk_path());
-      if (missingOverlay || !FLAGS_resume || newOverlay) {
-        CreateQcowOverlay(config.crosvm_binary(),
-                          config.os_composite_disk_path(), overlay_path);
+      create_overlay_image(config, instance.PerInstancePath("overlay.img"));
+      if (instance.start_ap()) {
+        create_overlay_image(config,
+                             instance.PerInstancePath("ap_overlay.img"));
       }
     }
   }
