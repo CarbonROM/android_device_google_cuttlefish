@@ -100,6 +100,8 @@ DEFINE_string(vm_manager, "",
 DEFINE_string(gpu_mode, cuttlefish::kGpuModeAuto,
               "What gpu configuration to use, one of {auto, drm_virgl, "
               "gfxstream, guest_swiftshader}");
+DEFINE_string(hwcomposer, cuttlefish::kHwComposerAuto,
+              "What hardware composer to use, one of {auto, drm, ranchu} ");
 DEFINE_string(gpu_capture_binary, "",
               "Path to the GPU capture binary to use when capturing GPU traces"
               "(ngfx, renderdoc, etc)");
@@ -462,7 +464,7 @@ void ReadKernelConfig(KernelConfig* kernel_config) {
 } // namespace
 
 CuttlefishConfig InitializeCuttlefishConfiguration(
-    const std::string& instance_dir, int modem_simulator_count,
+    const std::string& root_dir, int modem_simulator_count,
     KernelConfig kernel_config, fruit::Injector<>& injector) {
   CuttlefishConfig tmp_config_obj;
 
@@ -471,7 +473,8 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
         << "Failed to save fragment " << fragment->Name();
   }
 
-  tmp_config_obj.set_assembly_dir(FLAGS_assembly_dir);
+  tmp_config_obj.set_root_dir(root_dir);
+
   tmp_config_obj.set_target_arch(kernel_config.target_arch);
   tmp_config_obj.set_bootconfig_supported(kernel_config.bootconfig_supported);
   auto vmm = GetVmManager(FLAGS_vm_manager, kernel_config.target_arch);
@@ -567,15 +570,33 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
         << "GPU capture only supported with --norestart_subprocesses";
   }
 
+  tmp_config_obj.set_hwcomposer(FLAGS_hwcomposer);
+  if (!tmp_config_obj.hwcomposer().empty()) {
+    if (tmp_config_obj.hwcomposer() == kHwComposerRanchu) {
+      CHECK(tmp_config_obj.gpu_mode() != kGpuModeDrmVirgl)
+        << "ranchu hwcomposer not supported with --gpu_mode=drm_virgl";
+    }
+  }
+
+  if (tmp_config_obj.hwcomposer() == kHwComposerAuto) {
+      if (tmp_config_obj.gpu_mode() == kGpuModeDrmVirgl) {
+        tmp_config_obj.set_hwcomposer(kHwComposerDrmMinigbm);
+      } else {
+        tmp_config_obj.set_hwcomposer(kHwComposerRanchu);
+      }
+  }
+
   // Sepolicy rules need to be updated to support gpu mode. Temporarily disable
   // auto-enabling sandbox when gpu is enabled (b/152323505).
   if (tmp_config_obj.gpu_mode() != kGpuModeGuestSwiftshader) {
     SetCommandLineOptionWithMode("enable_sandbox", "false", SET_FLAGS_DEFAULT);
   }
 
-  if (vmm->ConfigureGpuMode(tmp_config_obj.gpu_mode()).empty()) {
-    LOG(FATAL) << "Invalid gpu_mode=" << FLAGS_gpu_mode <<
-               " does not work with vm_manager=" << FLAGS_vm_manager;
+  if (vmm->ConfigureGraphics(tmp_config_obj.gpu_mode(),
+         tmp_config_obj.hwcomposer()).empty()) {
+    LOG(FATAL) << "Invalid (gpu_mode=," << FLAGS_gpu_mode <<
+               " hwcomposer= " << FLAGS_hwcomposer <<
+               ") does not work with vm_manager=" << FLAGS_vm_manager;
   }
 
   CHECK(!FLAGS_smt || FLAGS_cpus % 2 == 0)
@@ -706,10 +727,7 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
 
     auto instance = tmp_config_obj.ForInstance(num);
     auto const_instance =
-        const_cast<const CuttlefishConfig&>(tmp_config_obj)
-            .ForInstance(num);
-    // Set this first so that calls to PerInstancePath below are correct
-    instance.set_instance_dir(instance_dir + "." + std::to_string(num));
+        const_cast<const CuttlefishConfig&>(tmp_config_obj).ForInstance(num);
     instance.set_use_allocd(FLAGS_use_allocd);
     if (FLAGS_use_random_serial) {
       instance.set_serial_number(
