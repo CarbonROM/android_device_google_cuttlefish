@@ -126,6 +126,10 @@ static const std::set<VersionedAidlPackage> kKnownMissingAidl = {
     // No implementations on cuttlefish for omapi aidl hal
     {"android.se.omapi.", 1},
 
+    // Temporarily treat the dice hal default implementation as missing until it
+    // and its dependencies have landed. b/198197213
+    {"android.hardware.security.dice.", 1},
+
     // These KeyMaster types are in an AIDL types-only HAL because they're used
     // by the Identity Credential AIDL HAL. Remove this when fully porting
     // KeyMaster to AIDL.
@@ -152,6 +156,8 @@ static const std::set<VersionedAidlPackage> kKnownMissingAidl = {
     // These types are only used in TV.
     {"android.hardware.tv.tuner.", 1},
 
+    // No implementation in AOSP for supplicant aidl hal (b/210166896)
+    {"android.hardware.wifi.supplicant.", 1},
 
     // These versions need to be implemented (b/198331776)
     {"android.hardware.radio.", 1},
