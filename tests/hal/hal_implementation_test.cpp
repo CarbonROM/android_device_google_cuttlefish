@@ -82,6 +82,7 @@ static const std::set<std::string> kKnownMissingHidl = {
     "android.hardware.soundtrigger@2.3",
     "android.hardware.secure_element@1.2",
     "android.hardware.sensors@1.0",
+    "android.hardware.sensors@2.1",
     "android.hardware.tetheroffload.config@1.0",
     "android.hardware.tetheroffload.control@1.1", // see b/170699770
     "android.hardware.thermal@1.1",
@@ -94,6 +95,7 @@ static const std::set<std::string> kKnownMissingHidl = {
     "android.hardware.vr@1.0",
     "android.hardware.weaver@1.0",
     "android.hardware.wifi.hostapd@1.3",
+    "android.hardware.wifi.supplicant@1.4",
     "android.hardware.wifi.offload@1.0",
     "android.hidl.base@1.0",
     "android.hidl.memory.token@1.0",
@@ -159,9 +161,6 @@ static const std::set<VersionedAidlPackage> kKnownMissingAidl = {
 
     // These types are only used in TV.
     {"android.hardware.tv.tuner.", 1},
-
-    // No implementation in AOSP for supplicant aidl hal (b/210166896)
-    {"android.hardware.wifi.supplicant.", 1},
 
     // types-only packages, which never expect a default implementation
     {"android.hardware.radio.", 1},
