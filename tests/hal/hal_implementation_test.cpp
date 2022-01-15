@@ -112,9 +112,15 @@ struct VersionedAidlPackage {
 };
 
 static const std::set<VersionedAidlPackage> kKnownMissingAidl = {
+    // Cuttlefish Identity Credential HAL implementation is currently
+    // stuck at version 3 while RKP support is being added. Will be
+    // updated soon.
+    {"android.hardware.identity.", 4},
+
     // types-only packages, which never expect a default implementation
     {"android.hardware.audio.common.", 1},
     {"android.hardware.biometrics.common.", 1},
+    {"android.hardware.biometrics.common.", 2},
     {"android.hardware.common.", 1},
     {"android.hardware.common.", 2},
     {"android.hardware.common.fmq.", 1},
