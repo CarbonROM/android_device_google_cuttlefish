@@ -92,7 +92,7 @@ const char* const kGpuModeDrmVirgl = "drm_virgl";
 const char* const kGpuModeGfxStream = "gfxstream";
 
 const char* const kHwComposerAuto = "auto";
-const char* const kHwComposerDrmMinigbm = "drm_minigbm";
+const char* const kHwComposerDrm = "drm";
 const char* const kHwComposerRanchu = "ranchu";
 
 std::string DefaultEnvironmentPath(const char* environment_key,
@@ -172,6 +172,14 @@ void CuttlefishConfig::set_enable_gpu_udmabuf(const bool enable_gpu_udmabuf) {
 }
 bool CuttlefishConfig::enable_gpu_udmabuf() const {
   return (*dictionary_)[kEnableGpuUdmabuf].asBool();
+}
+
+static constexpr char kEnableGpuAngle[] = "enable_gpu_angle";
+void CuttlefishConfig::set_enable_gpu_angle(const bool enable_gpu_angle) {
+  (*dictionary_)[kEnableGpuAngle] = enable_gpu_angle;
+}
+bool CuttlefishConfig::enable_gpu_angle() const {
+  return (*dictionary_)[kEnableGpuAngle].asBool();
 }
 
 static constexpr char kCpus[] = "cpus";
@@ -740,6 +748,51 @@ void CuttlefishConfig::set_wmediumd_config(const std::string& config) {
 }
 std::string CuttlefishConfig::wmediumd_config() const {
   return (*dictionary_)[kWmediumdConfig].asString();
+}
+
+static constexpr char kRootcanalHciPort[] = "rootcanal_hci_port";
+int CuttlefishConfig::rootcanal_hci_port() const {
+  return (*dictionary_)[kRootcanalHciPort].asInt();
+}
+void CuttlefishConfig::set_rootcanal_hci_port(int rootcanal_hci_port) {
+  (*dictionary_)[kRootcanalHciPort] = rootcanal_hci_port;
+}
+
+static constexpr char kRootcanalLinkPort[] = "rootcanal_link_port";
+int CuttlefishConfig::rootcanal_link_port() const {
+  return (*dictionary_)[kRootcanalLinkPort].asInt();
+}
+void CuttlefishConfig::set_rootcanal_link_port(int rootcanal_link_port) {
+  (*dictionary_)[kRootcanalLinkPort] = rootcanal_link_port;
+}
+
+static constexpr char kRootcanalTestPort[] = "rootcanal_test_port";
+int CuttlefishConfig::rootcanal_test_port() const {
+  return (*dictionary_)[kRootcanalTestPort].asInt();
+}
+void CuttlefishConfig::set_rootcanal_test_port(int rootcanal_test_port) {
+  (*dictionary_)[kRootcanalTestPort] = rootcanal_test_port;
+}
+
+static constexpr char kRootcanalConfigFile[] = "rootcanal_config_file";
+std::string CuttlefishConfig::rootcanal_config_file() const {
+  return (*dictionary_)[kRootcanalConfigFile].asString();
+}
+void CuttlefishConfig::set_rootcanal_config_file(
+    const std::string& rootcanal_config_file) {
+  (*dictionary_)[kRootcanalConfigFile] =
+      DefaultHostArtifactsPath(rootcanal_config_file);
+}
+
+static constexpr char kRootcanalDefaultCommandsFile[] =
+    "rootcanal_default_commands_file";
+std::string CuttlefishConfig::rootcanal_default_commands_file() const {
+  return (*dictionary_)[kRootcanalDefaultCommandsFile].asString();
+}
+void CuttlefishConfig::set_rootcanal_default_commands_file(
+    const std::string& rootcanal_default_commands_file) {
+  (*dictionary_)[kRootcanalDefaultCommandsFile] =
+      DefaultHostArtifactsPath(rootcanal_default_commands_file);
 }
 
 static constexpr char kRecordScreen[] = "record_screen";
