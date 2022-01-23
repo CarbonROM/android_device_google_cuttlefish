@@ -646,7 +646,7 @@ PRODUCT_PACKAGES += \
     com.android.hardware.usb
 else
 PRODUCT_PACKAGES += \
-    android.hardware.usb@1.0-service
+    android.hardware.usb-service.example
 endif
 
 # Vibrator HAL
@@ -802,3 +802,7 @@ PRODUCT_PRODUCT_PROPERTIES += \
 # Vendor Dlkm Locader
 PRODUCT_PACKAGES += \
    dlkm_loader
+
+# NFC AIDL HAL
+PRODUCT_PACKAGES += \
+    android.hardware.nfc-service.cuttlefish
