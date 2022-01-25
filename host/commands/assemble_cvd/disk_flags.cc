@@ -248,6 +248,7 @@ std::vector<ImagePartition> GetOsCompositeDiskConfig() {
 }
 
 std::vector<ImagePartition> persistent_composite_disk_config(
+    const CuttlefishConfig& config,
     const CuttlefishConfig::InstanceSpecific& instance) {
   std::vector<ImagePartition> partitions;
 
@@ -264,14 +265,16 @@ std::vector<ImagePartition> persistent_composite_disk_config(
         .image_file_path = instance.factory_reset_protected_path(),
     });
   }
-  partitions.push_back(ImagePartition{
-      .label = "bootconfig",
-      .image_file_path = instance.persistent_bootconfig_path(),
-  });
-  partitions.push_back(ImagePartition{
-      .label = "vbmeta",
-      .image_file_path = instance.vbmeta_path(),
-  });
+  if (config.bootconfig_supported()) {
+    partitions.push_back(ImagePartition{
+        .label = "bootconfig",
+        .image_file_path = instance.persistent_bootconfig_path(),
+    });
+    partitions.push_back(ImagePartition{
+        .label = "vbmeta",
+        .image_file_path = instance.vbmeta_path(),
+    });
+  }
   return partitions;
 }
 
@@ -406,10 +409,11 @@ bool CreatePersistentCompositeDisk(
         instance.PerInstancePath("persistent_composite_gpt_header.img");
     std::string footer_path =
         instance.PerInstancePath("persistent_composite_gpt_footer.img");
-    CreateCompositeDisk(persistent_composite_disk_config(instance), header_path,
-                        footer_path, instance.persistent_composite_disk_path());
+    CreateCompositeDisk(persistent_composite_disk_config(config, instance),
+                        header_path, footer_path,
+                        instance.persistent_composite_disk_path());
   } else {
-    AggregateImage(persistent_composite_disk_config(instance),
+    AggregateImage(persistent_composite_disk_config(config, instance),
                    instance.persistent_composite_disk_path());
   }
   return true;
@@ -508,7 +512,14 @@ class GeneratePersistentBootconfigAndVbmeta : public Feature {
   std::string Name() const override {
     return "GeneratePersistentBootconfigAndVbmeta";
   }
-  bool Enabled() const override { return !config_.protected_vm(); }
+  //  Cuttlefish for the time being won't be able to support OTA from a
+  //  non-bootconfig kernel to a bootconfig-kernel (or vice versa) IF the
+  //  device is stopped (via stop_cvd). This is rarely an issue since OTA
+  //  testing run on cuttlefish is done within one launch cycle of the device.
+  //  If this ever becomes an issue, this code will have to be rewritten.
+  bool Enabled() const override {
+    return (!config_.protected_vm() && config_.bootconfig_supported());
+  }
 
  private:
   std::unordered_set<Feature*> Dependencies() const override { return {}; }
@@ -526,15 +537,6 @@ class GeneratePersistentBootconfigAndVbmeta : public Feature {
       LOG(ERROR) << "Unable to open bootconfig file: "
                  << bootconfig_fd->StrError();
       return false;
-    }
-
-    //  Cuttlefish for the time being won't be able to support OTA from a
-    //  non-bootconfig kernel to a bootconfig-kernel (or vice versa) IF the
-    //  device is stopped (via stop_cvd). This is rarely an issue since OTA
-    //  testing run on cuttlefish is done within one launch cycle of the device.
-    //  If this ever becomes an issue, this code will have to be rewritten.
-    if (!config_.bootconfig_supported()) {
-      return true;
     }
 
     const std::string bootconfig =
@@ -679,6 +681,37 @@ class InitializeAccessKregistryImage : public Feature {
   const CuttlefishConfig::InstanceSpecific& instance_;
 };
 
+class InitializeHwcomposerPmemImage : public Feature {
+ public:
+  INJECT(InitializeHwcomposerPmemImage(
+      const CuttlefishConfig& config,
+      const CuttlefishConfig::InstanceSpecific& instance))
+      : config_(config), instance_(instance) {}
+
+  // Feature
+  std::string Name() const override { return "InitializeHwcomposerPmemImage"; }
+  bool Enabled() const override { return !config_.protected_vm(); }
+
+ private:
+  std::unordered_set<Feature*> Dependencies() const override { return {}; }
+  bool Setup() {
+    if (FileExists(instance_.hwcomposer_pmem_path())) {
+      return true;
+    }
+    bool success =
+        CreateBlankImage(instance_.hwcomposer_pmem_path(), 2 /* mb */, "none");
+    if (!success) {
+      LOG(ERROR) << "Failed to create hwcomposer pmem image \""
+                 << instance_.hwcomposer_pmem_path() << "\"";
+      return false;
+    }
+    return true;
+  }
+
+  const CuttlefishConfig& config_;
+  const CuttlefishConfig::InstanceSpecific& instance_;
+};
+
 class InitializePstore : public Feature {
  public:
   INJECT(InitializePstore(const CuttlefishConfig& config,
@@ -797,6 +830,7 @@ static fruit::Component<> DiskChangesPerInstanceComponent(
       .bindInstance(*config)
       .bindInstance(*instance)
       .addMultibinding<Feature, InitializeAccessKregistryImage>()
+      .addMultibinding<Feature, InitializeHwcomposerPmemImage>()
       .addMultibinding<Feature, InitializePstore>()
       .addMultibinding<Feature, InitializeSdCard>()
       .addMultibinding<Feature, InitializeFactoryResetProtected>()
@@ -825,10 +859,10 @@ void CreateDynamicDiskFiles(const FetcherConfig& fetcher_config,
   for (const auto& instance : config.Instances()) {
     bool compositeMatchesDiskConfig = DoesCompositeMatchCurrentDiskConfig(
         instance.PerInstancePath("persistent_composite_disk_config.txt"),
-        persistent_composite_disk_config(instance));
-    bool oldCompositeDisk =
-        ShouldCreateCompositeDisk(instance.persistent_composite_disk_path(),
-                                  persistent_composite_disk_config(instance));
+        persistent_composite_disk_config(config, instance));
+    bool oldCompositeDisk = ShouldCreateCompositeDisk(
+        instance.persistent_composite_disk_path(),
+        persistent_composite_disk_config(config, instance));
 
     if (!compositeMatchesDiskConfig || oldCompositeDisk) {
       CHECK(CreatePersistentCompositeDisk(config, instance))
@@ -872,6 +906,9 @@ void CreateDynamicDiskFiles(const FetcherConfig& fetcher_config,
       }
       if (FileExists(instance.access_kregistry_path())) {
         CreateBlankImage(instance.access_kregistry_path(), 2 /* mb */, "none");
+      }
+      if (FileExists(instance.hwcomposer_pmem_path())) {
+        CreateBlankImage(instance.hwcomposer_pmem_path(), 2 /* mb */, "none");
       }
       if (FileExists(instance.pstore_path())) {
         CreateBlankImage(instance.pstore_path(), 2 /* mb */, "none");
