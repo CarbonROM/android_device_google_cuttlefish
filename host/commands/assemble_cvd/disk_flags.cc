@@ -805,6 +805,105 @@ class InitializeFactoryResetProtected : public Feature {
   const CuttlefishConfig::InstanceSpecific& instance_;
 };
 
+class InitializeInstanceCompositeDisk : public Feature {
+ public:
+  INJECT(InitializeInstanceCompositeDisk(
+      const CuttlefishConfig& config,
+      const CuttlefishConfig::InstanceSpecific& instance,
+      InitializeFactoryResetProtected& frp,
+      InitBootloaderEnvPartition& bootloader_env,
+      GeneratePersistentBootconfigAndVbmeta& bootconfig))
+      : config_(config),
+        instance_(instance),
+        frp_(frp),
+        bootloader_env_(bootloader_env),
+        bootconfig_(bootconfig) {}
+
+  std::string Name() const override {
+    return "InitializeInstanceCompositeDisk";
+  }
+  bool Enabled() const override { return true; }
+
+ private:
+  std::unordered_set<Feature*> Dependencies() const override {
+    return {
+        static_cast<Feature*>(&frp_),
+        static_cast<Feature*>(&bootloader_env_),
+        static_cast<Feature*>(&bootconfig_),
+    };
+  }
+  bool Setup() override {
+    bool compositeMatchesDiskConfig = DoesCompositeMatchCurrentDiskConfig(
+        instance_.PerInstancePath("persistent_composite_disk_config.txt"),
+        persistent_composite_disk_config(config_, instance_));
+    bool oldCompositeDisk =
+        ShouldCreateCompositeDisk(instance_.persistent_composite_disk_path(),
+                                  persistent_composite_disk_config(config_, instance_));
+
+    if (!compositeMatchesDiskConfig || oldCompositeDisk) {
+      bool success = CreatePersistentCompositeDisk(config_, instance_);
+      if (!success) {
+        LOG(ERROR) << "Failed to create persistent composite disk";
+        return false;
+      }
+    }
+    return true;
+  }
+
+  const CuttlefishConfig& config_;
+  const CuttlefishConfig::InstanceSpecific& instance_;
+  InitializeFactoryResetProtected& frp_;
+  InitBootloaderEnvPartition& bootloader_env_;
+  GeneratePersistentBootconfigAndVbmeta& bootconfig_;
+};
+
+class VbmetaEnforceMinimumSize : public Feature {
+ public:
+  INJECT(VbmetaEnforceMinimumSize()) {}
+
+  std::string Name() const override { return "VbmetaEnforceMinimumSize"; }
+  bool Enabled() const override { return true; }
+
+ private:
+  std::unordered_set<Feature*> Dependencies() const override { return {}; }
+  bool Setup() override {
+    // libavb expects to be able to read the maximum vbmeta size, so we must
+    // provide a partition which matches this or the read will fail
+    for (const auto& vbmeta_image :
+         {FLAGS_vbmeta_image, FLAGS_vbmeta_system_image}) {
+      if (FileSize(vbmeta_image) != VBMETA_MAX_SIZE) {
+        auto fd = SharedFD::Open(vbmeta_image, O_RDWR);
+        bool success = fd->Truncate(VBMETA_MAX_SIZE) == 0;
+        if (!success) {
+          LOG(ERROR) << "`truncate --size=" << VBMETA_MAX_SIZE << " "
+                     << vbmeta_image << "` "
+                     << "failed: " << fd->StrError();
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+};
+
+class BootloaderPresentCheck : public Feature {
+ public:
+  INJECT(BootloaderPresentCheck()) {}
+
+  std::string Name() const override { return "BootloaderPresentCheck"; }
+  bool Enabled() const override { return true; }
+
+ private:
+  std::unordered_set<Feature*> Dependencies() const override { return {}; }
+  bool Setup() override {
+    if (!FileHasContent(FLAGS_bootloader)) {
+      LOG(ERROR) << "File not found: " << FLAGS_bootloader;
+      return false;
+    }
+    return true;
+  }
+};
+
 static fruit::Component<> DiskChangesComponent(const FetcherConfig* fetcher,
                                                const CuttlefishConfig* config) {
   return fruit::createComponent()
@@ -812,6 +911,8 @@ static fruit::Component<> DiskChangesComponent(const FetcherConfig* fetcher,
       .bindInstance(*config)
       .addMultibinding<Feature, InitializeMetadataImage>()
       .addMultibinding<Feature, BootImageRepacker>()
+      .addMultibinding<Feature, VbmetaEnforceMinimumSize>()
+      .addMultibinding<Feature, BootloaderPresentCheck>()
       .install(FixedMiscImagePathComponent, &FLAGS_misc_image)
       .install(InitializeMiscImageComponent)
       .install(FixedDataImagePathComponent, &FLAGS_data_image)
@@ -819,7 +920,8 @@ static fruit::Component<> DiskChangesComponent(const FetcherConfig* fetcher,
       // Create esp if necessary
       .install(InitializeEspImageComponent, &FLAGS_otheros_esp_image,
                &FLAGS_otheros_kernel_path, &FLAGS_otheros_initramfs_path,
-               &FLAGS_otheros_root_image);
+               &FLAGS_otheros_root_image)
+      .install(SuperImageRebuilderComponent, &FLAGS_super_image);
 }
 
 static fruit::Component<> DiskChangesPerInstanceComponent(
@@ -835,6 +937,7 @@ static fruit::Component<> DiskChangesPerInstanceComponent(
       .addMultibinding<Feature, InitializeSdCard>()
       .addMultibinding<Feature, InitializeFactoryResetProtected>()
       .addMultibinding<Feature, GeneratePersistentBootconfigAndVbmeta>()
+      .addMultibinding<Feature, InitializeInstanceCompositeDisk>()
       .install(InitBootloaderEnvPartitionComponent);
 }
 
@@ -854,39 +957,6 @@ void CreateDynamicDiskFiles(const FetcherConfig& fetcher_config,
         instance_injector.getMultibindings<Feature>();
     CHECK(Feature::RunSetup(instance_features))
         << "Failed to run instance feature setup.";
-  }
-
-  for (const auto& instance : config.Instances()) {
-    bool compositeMatchesDiskConfig = DoesCompositeMatchCurrentDiskConfig(
-        instance.PerInstancePath("persistent_composite_disk_config.txt"),
-        persistent_composite_disk_config(config, instance));
-    bool oldCompositeDisk = ShouldCreateCompositeDisk(
-        instance.persistent_composite_disk_path(),
-        persistent_composite_disk_config(config, instance));
-
-    if (!compositeMatchesDiskConfig || oldCompositeDisk) {
-      CHECK(CreatePersistentCompositeDisk(config, instance))
-          << "Failed to create persistent composite disk";
-    }
-  }
-
-  // libavb expects to be able to read the maximum vbmeta size, so we must
-  // provide a partition which matches this or the read will fail
-  for (const auto& vbmeta_image : { FLAGS_vbmeta_image, FLAGS_vbmeta_system_image }) {
-    if (FileSize(vbmeta_image) != VBMETA_MAX_SIZE) {
-      auto fd = SharedFD::Open(vbmeta_image, O_RDWR);
-      CHECK(fd->Truncate(VBMETA_MAX_SIZE) == 0)
-        << "`truncate --size=" << VBMETA_MAX_SIZE << " " << vbmeta_image << "` "
-        << "failed: " << fd->StrError();
-    }
-  }
-
-  CHECK(FileHasContent(FLAGS_bootloader))
-      << "File not found: " << FLAGS_bootloader;
-
-  if (SuperImageNeedsRebuilding(fetcher_config, config)) {
-    bool success = RebuildSuperImage(fetcher_config, config, FLAGS_super_image);
-    CHECK(success) << "Super image rebuilding requested but could not be completed.";
   }
 
   bool oldOsCompositeDisk = ShouldCreateOsCompositeDisk(config);
