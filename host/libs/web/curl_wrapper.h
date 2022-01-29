@@ -37,10 +37,22 @@ struct CurlResponse {
 
 class CurlWrapper {
  public:
+  typedef std::function<bool(char*, size_t)> DataCallback;
+
   static std::unique_ptr<CurlWrapper> Create();
   static std::unique_ptr<CurlWrapper> WithServerErrorRetry(
       CurlWrapper&, int retry_attempts, std::chrono::milliseconds retry_delay);
   virtual ~CurlWrapper();
+
+  virtual CurlResponse<std::string> PostToString(
+      const std::string& url, const std::string& data,
+      const std::vector<std::string>& headers = {}) = 0;
+  virtual CurlResponse<Json::Value> PostToJson(
+      const std::string& url, const std::string& data,
+      const std::vector<std::string>& headers = {}) = 0;
+  virtual CurlResponse<Json::Value> PostToJson(
+      const std::string& url, const Json::Value& data,
+      const std::vector<std::string>& headers = {}) = 0;
 
   virtual CurlResponse<std::string> DownloadToFile(
       const std::string& url, const std::string& path,
@@ -48,6 +60,12 @@ class CurlWrapper {
   virtual CurlResponse<std::string> DownloadToString(
       const std::string& url, const std::vector<std::string>& headers = {}) = 0;
   virtual CurlResponse<Json::Value> DownloadToJson(
+      const std::string& url, const std::vector<std::string>& headers = {}) = 0;
+  virtual CurlResponse<bool> DownloadToCallback(
+      DataCallback callback, const std::string& url,
+      const std::vector<std::string>& headers = {}) = 0;
+
+  virtual CurlResponse<Json::Value> DeleteToJson(
       const std::string& url, const std::vector<std::string>& headers = {}) = 0;
 
   virtual std::string UrlEscape(const std::string&) = 0;
