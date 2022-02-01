@@ -76,6 +76,10 @@ LOCAL_AUDIO_PRODUCT_COPY_FILES ?= \
     frameworks/av/services/audiopolicy/config/a2dp_audio_policy_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/a2dp_audio_policy_configuration.xml \
     frameworks/av/services/audiopolicy/config/usb_audio_policy_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/usb_audio_policy_configuration.xml \
 
+# Include display settings for an auto device.
+PRODUCT_COPY_FILES += \
+    device/google/cuttlefish/shared/auto/display_settings.xml:$(TARGET_COPY_OUT_VENDOR)/etc/display_settings.xml
+
 # vehicle HAL
 ifeq ($(LOCAL_VHAL_PRODUCT_PACKAGE),)
     LOCAL_VHAL_PRODUCT_PACKAGE := android.hardware.automotive.vehicle@2.0-emulator-service
@@ -97,6 +101,23 @@ PRODUCT_PACKAGES += android.hardware.automotive.can@1.0-service
 PRODUCT_PACKAGES_DEBUG += canhalctrl \
     canhaldump \
     canhalsend
+
+# EVS
+# By default, we enable EvsManager and a mock EVS HAL implementation.  If you want to use your own
+# EVS HAL implementation, please set ENABLE_MOCK_EVSHAL as false and add your HAL implementation to
+# the product.  Please also check init.auto.rc and see how you can configure EvsManager to use your
+# EVS HAL.
+ENABLE_EVS_SERVICE ?= true
+ENABLE_MOCK_EVSHAL ?= true
+ENABLE_CAREVSSERVICE_SAMPLE ?= true
+ifeq ($(ENABLE_MOCK_EVSHAL), true)
+    PRODUCT_PACKAGES += android.hardware.automotive.evs@1.1-service \
+                        evs_app \
+                        android.frameworks.automotive.display@1.0-service
+    PRODUCT_COPY_FILES += \
+        device/google/cuttlefish/shared/auto/init.auto.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.auto.rc
+    BOARD_SEPOLICY_DIRS += device/google/cuttlefish/shared/auto/sepolicy/evs
+endif
 
 BOARD_IS_AUTOMOTIVE := true
 
