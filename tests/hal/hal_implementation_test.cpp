@@ -133,6 +133,12 @@ static const std::set<VersionedAidlPackage> kKnownMissingAidl = {
     {"android.hardware.graphics.common.", 3},
     {"android.hardware.input.common.", 1},
 
+    // This interface needs to be implemented (TODO:b/196432585)
+    {"android.hardware.camera.common.", 1},
+    {"android.hardware.camera.device.", 1},
+    {"android.hardware.camera.metadata.", 1},
+    {"android.hardware.camera.provider.", 1},
+
     // This interface needs to be implemented (b/193240715)
     {"android.hardware.graphics.composer3.", 1},
 
@@ -160,6 +166,7 @@ static const std::set<VersionedAidlPackage> kKnownMissingAidl = {
     {"android.automotive.computepipe.runner.", 1},
     {"android.automotive.watchdog.", 2},
     {"android.automotive.watchdog.", 3},
+    {"android.frameworks.automotive.display.", 1},
     {"android.frameworks.automotive.powerpolicy.", 1},
     {"android.frameworks.automotive.telemetry.", 1},
     {"android.hardware.automotive.audiocontrol.", 1},
