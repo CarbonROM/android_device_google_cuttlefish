@@ -570,10 +570,6 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     android.hardware.identity-service.remote
 
-# Input Classifier HAL
-PRODUCT_PACKAGES += \
-    android.hardware.input.classifier@1.0-service.default
-
 PRODUCT_PACKAGES += \
     android.hardware.input.processor-service.example
 
@@ -762,11 +758,6 @@ PRODUCT_VENDOR_PROPERTIES += ro.vendor.wifi_impl=mac8011_hwsim_virtio
 
 $(call soong_config_append,cvdhost,enforce_mac80211_hwsim,true)
 
-# Wifi Runtime Resource Overlay
-PRODUCT_PACKAGES += \
-    CuttlefishTetheringOverlay \
-    CuttlefishWifiOverlay
-
 else
 PRODUCT_PACKAGES += setup_wifi
 PRODUCT_VENDOR_PROPERTIES += ro.vendor.wifi_impl=virt_wifi
@@ -777,6 +768,13 @@ endif
 # UWB HAL
 PRODUCT_PACKAGES += \
     android.hardware.uwb-service
+
+ifeq ($(PRODUCT_ENFORCE_MAC80211_HWSIM),true)
+# Wifi Runtime Resource Overlay
+PRODUCT_PACKAGES += \
+    CuttlefishTetheringOverlay \
+    CuttlefishWifiOverlay
+endif
 
 # Host packages to install
 PRODUCT_HOST_PACKAGES += socket_vsock_proxy

@@ -16,10 +16,21 @@
 
 #define LOG_TAG "RILC"
 
+#include "RefRadioNetwork.h"
+
+#include <android-base/logging.h>
+#include <android/binder_manager.h>
+#include <android/binder_process.h>
 #include <android/hardware/radio/1.6/IRadio.h>
 #include <android/hardware/radio/1.6/IRadioIndication.h>
 #include <android/hardware/radio/1.6/IRadioResponse.h>
 #include <android/hardware/radio/1.6/types.h>
+#include <libradiocompat/CallbackManager.h>
+#include <libradiocompat/RadioData.h>
+#include <libradiocompat/RadioMessaging.h>
+#include <libradiocompat/RadioModem.h>
+#include <libradiocompat/RadioSim.h>
+#include <libradiocompat/RadioVoice.h>
 
 #include <android/hardware/radio/deprecated/1.0/IOemHook.h>
 
@@ -37,8 +48,8 @@
 using namespace android::hardware::radio;
 using namespace android::hardware::radio::V1_0;
 using namespace android::hardware::radio::deprecated::V1_0;
-using ::android::hardware::configureRpcThreadpool;
-using ::android::hardware::joinRpcThreadpool;
+using namespace std::string_literals;
+namespace compat = android::hardware::radio::compat;
 using ::android::hardware::Return;
 using ::android::hardware::hidl_bitfield;
 using ::android::hardware::hidl_string;
@@ -973,11 +984,11 @@ void checkReturnStatus(int32_t slotId, Return<void>& ret, bool isRadioService) {
         int counter = isRadioService ? mCounterRadio[slotId] : mCounterOemHook[slotId];
         pthread_rwlock_t *radioServiceRwlockPtr = radio_1_6::getRadioServiceRwlock(slotId);
         int ret = pthread_rwlock_unlock(radioServiceRwlockPtr);
-        assert(ret == 0);
+        CHECK_EQ(ret, 0);
 
         // acquire wrlock
         ret = pthread_rwlock_wrlock(radioServiceRwlockPtr);
-        assert(ret == 0);
+        CHECK_EQ(ret, 0);
 
         // make sure the counter value has not changed
         if (counter == (isRadioService ? mCounterRadio[slotId] : mCounterOemHook[slotId])) {
@@ -1006,11 +1017,11 @@ void checkReturnStatus(int32_t slotId, Return<void>& ret, bool isRadioService) {
 
         // release wrlock
         ret = pthread_rwlock_unlock(radioServiceRwlockPtr);
-        assert(ret == 0);
+        CHECK_EQ(ret, 0);
 
         // Reacquire rdlock
         ret = pthread_rwlock_rdlock(radioServiceRwlockPtr);
-        assert(ret == 0);
+        CHECK_EQ(ret, 0);
     }
 }
 
@@ -1025,7 +1036,7 @@ Return<void> RadioImpl_1_6::setResponseFunctions(
 
     pthread_rwlock_t *radioServiceRwlockPtr = radio_1_6::getRadioServiceRwlock(mSlotId);
     int ret = pthread_rwlock_wrlock(radioServiceRwlockPtr);
-    assert(ret == 0);
+    CHECK_EQ(ret, 0);
 
     mRadioResponse = radioResponseParam;
     mRadioIndication = radioIndicationParam;
@@ -1075,7 +1086,7 @@ Return<void> RadioImpl_1_6::setResponseFunctions(
     mCounterRadio[mSlotId]++;
 
     ret = pthread_rwlock_unlock(radioServiceRwlockPtr);
-    assert(ret == 0);
+    CHECK_EQ(ret, 0);
 
     // client is connected. Send initial indications.
     android::onNewCommandConnect((RIL_SOCKET_ID) mSlotId);
@@ -4763,14 +4774,14 @@ Return<void> OemHookImpl::setResponseFunctions(
 
     pthread_rwlock_t *radioServiceRwlockPtr = radio_1_6::getRadioServiceRwlock(mSlotId);
     int ret = pthread_rwlock_wrlock(radioServiceRwlockPtr);
-    assert(ret == 0);
+    CHECK_EQ(ret, 0);
 
     mOemHookResponse = oemHookResponseParam;
     mOemHookIndication = oemHookIndicationParam;
     mCounterOemHook[mSlotId]++;
 
     ret = pthread_rwlock_unlock(radioServiceRwlockPtr);
-    assert(ret == 0);
+    CHECK_EQ(ret, 0);
 
     return Void();
 }
@@ -10555,7 +10566,7 @@ int radio_1_6::updateSimPhonebookRecordsResponse(int slotId, int responseType, i
         V1_6::RadioResponseInfo responseInfo = {};
         populateResponseInfo_1_6(responseInfo, serial, responseType, e);
 
-        int32_t updatedRecordIndex;
+        int32_t updatedRecordIndex = 0;
         Return<void> retStatus =
                 radioService[slotId]->mRadioResponseV1_6->updateSimPhonebookRecordsResponse(
                         responseInfo, updatedRecordIndex);
@@ -10927,8 +10938,8 @@ int radio_1_6::currentSignalStrengthInd(int slotId, int indicationType, int toke
                                         void* response, size_t responseLen) {
     if (radioService[slotId] != NULL && (radioService[slotId]->mRadioIndication != NULL ||
                                          radioService[slotId]->mRadioIndicationV1_2 != NULL ||
-                                         radioService[slotId]->mRadioIndicationV1_4 != NULL) ||
-        radioService[slotId]->mRadioIndicationV1_6 != NULL) {
+                                         radioService[slotId]->mRadioIndicationV1_4 != NULL ||
+                                         radioService[slotId]->mRadioIndicationV1_6 != NULL)) {
         if (response == NULL || responseLen != sizeof(RIL_SignalStrength_v12)) {
             RLOGE("currentSignalStrengthInd: invalid response");
             return 0;
@@ -13326,6 +13337,20 @@ int radio_1_6::oemHookRawInd(int slotId,
     return 0;
 }
 
+template <typename T>
+static void publishRadioHal(std::shared_ptr<compat::DriverContext> ctx, sp<V1_5::IRadio> hidlHal,
+                            std::shared_ptr<compat::CallbackManager> cm, const std::string& slot) {
+    static std::vector<std::shared_ptr<ndk::ICInterface>> gPublishedHals;
+
+    const auto instance = T::descriptor + "/"s + slot;
+    RLOGD("Publishing %s", instance.c_str());
+
+    auto aidlHal = ndk::SharedRefBase::make<T>(ctx, hidlHal, cm);
+    gPublishedHals.push_back(aidlHal);
+    const auto status = AServiceManager_addService(aidlHal->asBinder().get(), instance.c_str());
+    CHECK_EQ(status, STATUS_OK);
+}
+
 void radio_1_6::registerService(RIL_RadioFunctions *callbacks, CommandInfo *commands) {
     using namespace android::hardware;
     int simCount = 1;
@@ -13349,11 +13374,10 @@ void radio_1_6::registerService(RIL_RadioFunctions *callbacks, CommandInfo *comm
     s_vendorFunctions = callbacks;
     s_commands = commands;
 
-    configureRpcThreadpool(1, true /* callerWillJoin */);
     for (int i = 0; i < simCount; i++) {
         pthread_rwlock_t *radioServiceRwlockPtr = getRadioServiceRwlock(i);
         int ret = pthread_rwlock_wrlock(radioServiceRwlockPtr);
-        assert(ret == 0);
+        CHECK_EQ(ret, 0);
 
         RLOGD("sim i = %d registering ...", i);
 
@@ -13363,8 +13387,19 @@ void radio_1_6::registerService(RIL_RadioFunctions *callbacks, CommandInfo *comm
         radioService[i]->mSimCardPowerState = V1_1::CardPowerState::POWER_UP;
         RLOGD("registerService: starting android::hardware::radio::V1_6::IRadio %s for slot %d",
                 serviceNames[i], i);
-        android::status_t status = radioService[i]->registerAsService(serviceNames[i]);
-        LOG_ALWAYS_FATAL_IF(status != android::OK, "status %d", status);
+
+        // use a compat shim to convert HIDL interface to AIDL and publish it
+        // PLEASE NOTE this is a temporary solution
+        auto radioHidl = radioService[i];
+        const auto slot = serviceNames[i];
+        auto context = std::make_shared<compat::DriverContext>();
+        auto callbackMgr = std::make_shared<compat::CallbackManager>(context, radioHidl);
+        publishRadioHal<compat::RadioData>(context, radioHidl, callbackMgr, slot);
+        publishRadioHal<compat::RadioMessaging>(context, radioHidl, callbackMgr, slot);
+        publishRadioHal<compat::RadioModem>(context, radioHidl, callbackMgr, slot);
+        publishRadioHal<cf::ril::RefRadioNetwork>(context, radioHidl, callbackMgr, slot);
+        publishRadioHal<compat::RadioSim>(context, radioHidl, callbackMgr, slot);
+        publishRadioHal<compat::RadioVoice>(context, radioHidl, callbackMgr, slot);
 
         RLOGD("registerService: OemHook is enabled = %s", kOemHookEnabled ? "true" : "false");
         if (kOemHookEnabled) {
@@ -13374,12 +13409,12 @@ void radio_1_6::registerService(RIL_RadioFunctions *callbacks, CommandInfo *comm
         }
 
         ret = pthread_rwlock_unlock(radioServiceRwlockPtr);
-        assert(ret == 0);
+        CHECK_EQ(ret, 0);
     }
 }
 
 void rilc_thread_pool() {
-    joinRpcThreadpool();
+    ABinderProcess_joinThreadPool();
 }
 
 pthread_rwlock_t * radio_1_6::getRadioServiceRwlock(int slotId) {
