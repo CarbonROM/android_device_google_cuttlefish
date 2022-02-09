@@ -32,6 +32,7 @@
 #include "host/libs/config/host_tools_version.h"
 #include "host/libs/graphics_detector/graphics_detector.h"
 #include "host/libs/vm_manager/crosvm_manager.h"
+#include "host/libs/vm_manager/gem5_manager.h"
 #include "host/libs/vm_manager/qemu_manager.h"
 #include "host/libs/vm_manager/vm_manager.h"
 
@@ -246,6 +247,8 @@ DEFINE_string(qemu_binary_dir, "/usr/bin",
               "Path to the directory containing the qemu binary to use");
 DEFINE_string(crosvm_binary, HostBinaryPath("crosvm"),
               "The Crosvm binary to use");
+DEFINE_string(gem5_binary_dir, HostBinaryPath("gem5"),
+              "Path to the gem5 build tree root");
 DEFINE_bool(restart_subprocesses, true, "Restart any crashed host process");
 DEFINE_bool(enable_vehicle_hal_grpc_server, true, "Enables the vehicle HAL "
             "emulation gRPC server on the host");
@@ -335,6 +338,7 @@ DECLARE_string(system_image_dir);
 
 namespace cuttlefish {
 using vm_manager::QemuManager;
+using vm_manager::Gem5Manager;
 using vm_manager::GetVmManager;
 
 namespace {
@@ -413,13 +417,15 @@ std::optional<CuttlefishConfig::DisplayConfig> ParseDisplayConfig(
 }
 
 #ifdef __ANDROID__
-void ReadKernelConfig(KernelConfig* kernel_config) {
+Result<KernelConfig> ReadKernelConfig() {
   // QEMU isn't on Android, so always follow host arch
-  kernel_config->target_arch = HostArch();
-  kernel_config->bootconfig_supported = true;
+  KernelConfig ret{};
+  ret.target_arch = HostArch();
+  ret.bootconfig_supported = true;
+  return ret;
 }
 #else
-void ReadKernelConfig(KernelConfig* kernel_config) {
+Result<KernelConfig> ReadKernelConfig() {
   // extract-ikconfig can be called directly on the boot image since it looks
   // for the ikconfig header in the image before extracting the config list.
   // This code is liable to break if the boot image ever includes the
@@ -437,31 +443,33 @@ void ReadKernelConfig(KernelConfig* kernel_config) {
   std::string ikconfig_path =
       StringFromEnv("TEMP", "/tmp") + "/ikconfig.XXXXXX";
   auto ikconfig_fd = SharedFD::Mkstemp(&ikconfig_path);
-  CHECK(ikconfig_fd->IsOpen())
-      << "Unable to create ikconfig file: " << ikconfig_fd->StrError();
+  CF_EXPECT(ikconfig_fd->IsOpen(),
+            "Unable to create ikconfig file: " << ikconfig_fd->StrError());
   ikconfig_cmd.RedirectStdIO(Subprocess::StdIOChannel::kStdOut, ikconfig_fd);
 
   auto ikconfig_proc = ikconfig_cmd.Start();
-  CHECK(ikconfig_proc.Started() && ikconfig_proc.Wait() == 0)
-      << "Failed to extract ikconfig from " << kernel_image_path;
+  CF_EXPECT(ikconfig_proc.Started() && ikconfig_proc.Wait() == 0,
+            "Failed to extract ikconfig from " << kernel_image_path);
 
   std::string config = ReadFile(ikconfig_path);
 
+  KernelConfig kernel_config;
   if (config.find("\nCONFIG_ARM=y") != std::string::npos) {
-    kernel_config->target_arch = Arch::Arm;
+    kernel_config.target_arch = Arch::Arm;
   } else if (config.find("\nCONFIG_ARM64=y") != std::string::npos) {
-    kernel_config->target_arch = Arch::Arm64;
+    kernel_config.target_arch = Arch::Arm64;
   } else if (config.find("\nCONFIG_X86_64=y") != std::string::npos) {
-    kernel_config->target_arch = Arch::X86_64;
+    kernel_config.target_arch = Arch::X86_64;
   } else if (config.find("\nCONFIG_X86=y") != std::string::npos) {
-    kernel_config->target_arch = Arch::X86;
+    kernel_config.target_arch = Arch::X86;
   } else {
-    LOG(FATAL) << "Unknown target architecture";
+    return CF_ERR("Unknown target architecture");
   }
-  kernel_config->bootconfig_supported =
+  kernel_config.bootconfig_supported =
       config.find("\nCONFIG_BOOT_CONFIG=y") != std::string::npos;
 
   unlink(ikconfig_path.c_str());
+  return kernel_config;
 }
 #endif  // #ifdef __ANDROID__
 
@@ -637,6 +645,7 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
 
   tmp_config_obj.set_qemu_binary_dir(FLAGS_qemu_binary_dir);
   tmp_config_obj.set_crosvm_binary(FLAGS_crosvm_binary);
+  tmp_config_obj.set_gem5_binary_dir(FLAGS_gem5_binary_dir);
 
   tmp_config_obj.set_seccomp_policy_dir(FLAGS_seccomp_policy_dir);
 
@@ -795,9 +804,16 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
           {const_instance.PerInstancePath("os_composite.img")});
     } else {
       std::vector<std::string> virtual_disk_paths = {
-          const_instance.PerInstancePath("overlay.img"),
           const_instance.PerInstancePath("persistent_composite.img"),
       };
+      if (FLAGS_vm_manager != Gem5Manager::name()) {
+        virtual_disk_paths.insert(virtual_disk_paths.begin(),
+            const_instance.PerInstancePath("overlay.img"));
+      } else {
+        // Gem5 already uses CoW wrappers around disk images
+        virtual_disk_paths.insert(virtual_disk_paths.begin(),
+            tmp_config_obj.os_composite_disk_path());
+      }
       if (FLAGS_use_sdcard) {
         virtual_disk_paths.push_back(const_instance.sdcard_path());
       }
@@ -943,16 +959,21 @@ void SetDefaultFlagsForCrosvm() {
                                SET_FLAGS_DEFAULT);
 }
 
-bool GetKernelConfigAndSetDefaults(KernelConfig* kernel_config) {
-  bool invalid_manager = false;
+void SetDefaultFlagsForGem5() {
+  // TODO: Add support for gem5 gpu models
+  SetCommandLineOptionWithMode("gpu_mode", kGpuModeGuestSwiftshader,
+                               SET_FLAGS_DEFAULT);
 
-  if (!ResolveInstanceFiles()) {
-    return false;
-  }
+  SetCommandLineOptionWithMode("cpus", "1", SET_FLAGS_DEFAULT);
+}
 
-  ReadKernelConfig(kernel_config);
+Result<KernelConfig> GetKernelConfigAndSetDefaults() {
+  CF_EXPECT(ResolveInstanceFiles(), "Failed to resolve instance files");
+
+  KernelConfig kernel_config = CF_EXPECT(ReadKernelConfig());
+
   if (FLAGS_vm_manager == "") {
-    if (IsHostCompatible(kernel_config->target_arch)) {
+    if (IsHostCompatible(kernel_config.target_arch)) {
       FLAGS_vm_manager = CrosvmManager::name();
     } else {
       FLAGS_vm_manager = QemuManager::name();
@@ -960,33 +981,36 @@ bool GetKernelConfigAndSetDefaults(KernelConfig* kernel_config) {
   }
 
   if (FLAGS_vm_manager == QemuManager::name()) {
-    SetDefaultFlagsForQemu(kernel_config->target_arch);
+    SetDefaultFlagsForQemu(kernel_config.target_arch);
   } else if (FLAGS_vm_manager == CrosvmManager::name()) {
     SetDefaultFlagsForCrosvm();
+  } else if (FLAGS_vm_manager == Gem5Manager::name()) {
+    // TODO: Get the other architectures working
+    if (kernel_config.target_arch != Arch::Arm64) {
+      return CF_ERR("Gem5 only supports ARM64");
+    }
+    SetDefaultFlagsForGem5();
   } else {
-    std::cerr << "Unknown Virtual Machine Manager: " << FLAGS_vm_manager
-              << std::endl;
-    invalid_manager = true;
+    return CF_ERR("Unknown Virtual Machine Manager: " << FLAGS_vm_manager);
   }
-  auto host_operator_present =
-      cuttlefish::FileIsSocket(HOST_OPERATOR_SOCKET_PATH);
-  // The default for starting signaling server depends on whether or not webrtc
-  // is to be started and the presence of the host orchestrator.
-  SetCommandLineOptionWithMode(
-      "start_webrtc_sig_server",
-      FLAGS_start_webrtc && !host_operator_present ? "true" : "false",
-      SET_FLAGS_DEFAULT);
-  SetCommandLineOptionWithMode(
-      "webrtc_sig_server_addr",
-      host_operator_present ? HOST_OPERATOR_SOCKET_PATH : "0.0.0.0",
-      SET_FLAGS_DEFAULT);
-  if (invalid_manager) {
-    return false;
+  if (FLAGS_vm_manager != Gem5Manager::name()) {
+    auto host_operator_present =
+        cuttlefish::FileIsSocket(HOST_OPERATOR_SOCKET_PATH);
+    // The default for starting signaling server depends on whether or not webrtc
+    // is to be started and the presence of the host orchestrator.
+    SetCommandLineOptionWithMode(
+        "start_webrtc_sig_server",
+        FLAGS_start_webrtc && !host_operator_present ? "true" : "false",
+        SET_FLAGS_DEFAULT);
+    SetCommandLineOptionWithMode(
+        "webrtc_sig_server_addr",
+        host_operator_present ? HOST_OPERATOR_SOCKET_PATH : "0.0.0.0",
+        SET_FLAGS_DEFAULT);
   }
   // Set the env variable to empty (in case the caller passed a value for it).
   unsetenv(kCuttlefishConfigEnvVarName);
 
-  return true;
+  return kernel_config;
 }
 
 std::string GetConfigFilePath(const CuttlefishConfig& config) {
