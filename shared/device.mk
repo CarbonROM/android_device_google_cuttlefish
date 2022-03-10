@@ -402,6 +402,9 @@ PRODUCT_PACKAGES += \
 # services running at the same time so make the user manually enables
 # in order to run with --gpu_mode=drm.
 ifeq ($(TARGET_ENABLE_DRMHWCOMPOSER),true)
+DEVICE_MANIFEST_FILE += \
+    device/google/cuttlefish/shared/config/manifest_android.hardware.graphics.composer@2.4-service.xml
+
 PRODUCT_PACKAGES += \
     android.hardware.graphics.composer@2.4-service \
     hwcomposer.drm
@@ -508,7 +511,7 @@ PRODUCT_PACKAGES += \
 # Drm HAL
 #
 PRODUCT_PACKAGES += \
-    android.hardware.drm@1.4-service.clearkey \
+    android.hardware.drm@latest-service.clearkey \
     android.hardware.drm@latest-service.widevine
 
 #
