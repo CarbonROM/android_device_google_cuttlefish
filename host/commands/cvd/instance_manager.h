@@ -16,40 +16,45 @@
 
 #pragma once
 
-#include <sys/socket.h>
-
-#include <memory>
+#include <map>
+#include <mutex>
 #include <optional>
-#include <vector>
+#include <string>
+
+#include <fruit/fruit.h>
 
 #include "cvd_server.pb.h"
 
 #include "common/libs/fs/shared_fd.h"
 #include "common/libs/utils/result.h"
-#include "common/libs/utils/unix_sockets.h"
 
 namespace cuttlefish {
 
-class RequestWithStdio {
- public:
-  RequestWithStdio(cvd::Request, std::vector<SharedFD>, std::optional<ucred>);
+constexpr char kStatusBin[] = "cvd_internal_status";
+constexpr char kStopBin[] = "cvd_internal_stop";
 
-  const cvd::Request& Message() const;
-  SharedFD In() const;
-  SharedFD Out() const;
-  SharedFD Err() const;
-  std::optional<SharedFD> Extra() const;
-  std::optional<ucred> Credentials() const;
+class InstanceManager {
+ public:
+  using AssemblyDir = std::string;
+  struct AssemblyInfo {
+    std::string host_binaries_dir;
+  };
+
+  INJECT(InstanceManager()) = default;
+
+  bool HasAssemblies() const;
+  void SetAssembly(const AssemblyDir&, const AssemblyInfo&);
+  Result<AssemblyInfo> GetAssembly(const AssemblyDir&) const;
+
+  cvd::Status CvdClear(const SharedFD& out, const SharedFD& err);
+  cvd::Status CvdFleet(const SharedFD& out, const std::string& envconfig) const;
 
  private:
-  cvd::Request message_;
-  std::vector<SharedFD> fds_;
-  std::optional<ucred> creds_;
+  mutable std::mutex assemblies_mutex_;
+  std::map<AssemblyDir, AssemblyInfo> assemblies_;
 };
 
-Result<UnixMessageSocket> GetClient(const SharedFD& client);
-Result<std::optional<RequestWithStdio>> GetRequest(const SharedFD& client);
-Result<void> SendResponse(const SharedFD& client,
-                          const cvd::Response& response);
+std::optional<std::string> GetCuttlefishConfigPath(
+    const std::string& assembly_dir);
 
 }  // namespace cuttlefish

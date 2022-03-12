@@ -18,8 +18,8 @@
 
 #include <atomic>
 #include <map>
-#include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -27,15 +27,15 @@
 
 #include "cvd_server.pb.h"
 
+#include "common/libs/fs/epoll.h"
 #include "common/libs/fs/shared_fd.h"
 #include "common/libs/utils/result.h"
 #include "common/libs/utils/unix_sockets.h"
+#include "host/commands/cvd/epoll_loop.h"
+#include "host/commands/cvd/instance_manager.h"
 #include "host/commands/cvd/server_client.h"
 
 namespace cuttlefish {
-
-constexpr char kStatusBin[] = "cvd_internal_status";
-constexpr char kStopBin[] = "cvd_internal_stop";
 
 class CvdServerHandler {
  public:
@@ -48,36 +48,30 @@ class CvdServerHandler {
 
 class CvdServer {
  public:
-  using AssemblyDir = std::string;
-  struct AssemblyInfo {
-    std::string host_binaries_dir;
-  };
+  INJECT(CvdServer(EpollPool&, InstanceManager&));
+  ~CvdServer();
 
-  INJECT(CvdServer());
-
-  bool HasAssemblies() const;
-  void SetAssembly(const AssemblyDir&, const AssemblyInfo&);
-  Result<AssemblyInfo> GetAssembly(const AssemblyDir&) const;
-
+  Result<void> StartServer(SharedFD server);
   void Stop();
-
-  Result<void> ServerLoop(SharedFD server);
-
-  cvd::Status CvdClear(const SharedFD& out, const SharedFD& err);
-  cvd::Status CvdFleet(const SharedFD& out, const std::string& envconfig) const;
+  void Join();
 
  private:
-  mutable std::mutex assemblies_mutex_;
-  std::map<AssemblyDir, AssemblyInfo> assemblies_;
+  Result<void> AcceptClient(EpollEvent);
+  Result<void> HandleMessage(EpollEvent);
+  Result<void> BestEffortWakeup();
+
+  EpollPool& epoll_pool_;
+  InstanceManager& instance_manager_;
   std::atomic_bool running_ = true;
+
+  // TODO(schuffelen): Move this thread pool to another class.
+  std::vector<std::thread> threads_;
 };
 
-fruit::Component<fruit::Required<CvdServer>> cvdCommandComponent();
-fruit::Component<fruit::Required<CvdServer>> cvdShutdownComponent();
+fruit::Component<fruit::Required<InstanceManager>> cvdCommandComponent();
+fruit::Component<fruit::Required<CvdServer, InstanceManager>>
+cvdShutdownComponent();
 fruit::Component<> cvdVersionComponent();
-
-std::optional<std::string> GetCuttlefishConfigPath(
-    const std::string& assembly_dir);
 
 struct CommandInvocation {
   std::string command;

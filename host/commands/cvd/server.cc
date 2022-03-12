@@ -39,59 +39,72 @@
 #include "common/libs/utils/result.h"
 #include "common/libs/utils/shared_fd_flag.h"
 #include "common/libs/utils/subprocess.h"
+#include "host/commands/cvd/epoll_loop.h"
 #include "host/commands/cvd/server_constants.h"
 #include "host/libs/config/cuttlefish_config.h"
 #include "host/libs/config/known_paths.h"
 
 namespace cuttlefish {
 
-static fruit::Component<> RequestComponent(CvdServer* server) {
+static fruit::Component<> RequestComponent(CvdServer* server,
+                                           InstanceManager* instance_manager) {
   return fruit::createComponent()
       .bindInstance(*server)
+      .bindInstance(*instance_manager)
       .install(cvdCommandComponent)
       .install(cvdShutdownComponent)
       .install(cvdVersionComponent);
 }
 
-std::optional<std::string> GetCuttlefishConfigPath(
-    const std::string& assembly_dir) {
-  std::string assembly_dir_realpath;
-  if (DirectoryExists(assembly_dir)) {
-    CHECK(android::base::Realpath(assembly_dir, &assembly_dir_realpath));
-    std::string config_path =
-        AbsolutePath(assembly_dir_realpath + "/" + "cuttlefish_config.json");
-    if (FileExists(config_path)) {
-      return config_path;
-    }
+static constexpr int kNumThreads = 10;
+
+CvdServer::CvdServer(EpollPool& epoll_pool, InstanceManager& instance_manager)
+    : epoll_pool_(epoll_pool),
+      instance_manager_(instance_manager),
+      running_(true) {
+  for (auto i = 0; i < kNumThreads; i++) {
+    threads_.emplace_back([this]() {
+      while (running_) {
+        auto result = epoll_pool_.HandleEvent();
+        if (!result.ok()) {
+          LOG(ERROR) << "Epoll worker error:\n" << result.error();
+        }
+      }
+      auto wakeup = BestEffortWakeup();
+      CHECK(wakeup.ok()) << wakeup.error().message();
+    });
   }
+}
+
+CvdServer::~CvdServer() {
+  running_ = false;
+  auto wakeup = BestEffortWakeup();
+  CHECK(wakeup.ok()) << wakeup.error().message();
+  Join();
+}
+
+Result<void> CvdServer::BestEffortWakeup() {
+  // This attempts to cascade through the responder threads, forcing them
+  // to wake up and see that running_ is false, then exit and wake up
+  // further threads.
+  auto eventfd = SharedFD::Event();
+  CF_EXPECT(eventfd->IsOpen(), eventfd->StrError());
+  CF_EXPECT(eventfd->EventfdWrite(1) == 0, eventfd->StrError());
+
+  auto cb = [](EpollEvent) -> Result<void> { return {}; };
+  CF_EXPECT(epoll_pool_.Register(eventfd, EPOLLIN, cb));
   return {};
 }
 
-CvdServer::CvdServer() : running_(true) {}
+void CvdServer::Stop() { running_ = false; }
 
-bool CvdServer::HasAssemblies() const {
-  std::lock_guard assemblies_lock(assemblies_mutex_);
-  return !assemblies_.empty();
-}
-
-void CvdServer::SetAssembly(const CvdServer::AssemblyDir& dir,
-                            const CvdServer::AssemblyInfo& info) {
-  std::lock_guard assemblies_lock(assemblies_mutex_);
-  assemblies_[dir] = info;
-}
-
-Result<CvdServer::AssemblyInfo> CvdServer::GetAssembly(
-    const CvdServer::AssemblyDir& dir) const {
-  std::lock_guard assemblies_lock(assemblies_mutex_);
-  auto info_it = assemblies_.find(dir);
-  if (info_it == assemblies_.end()) {
-    return CF_ERR("No assembly dir \"" << dir << "\"");
-  } else {
-    return info_it->second;
+void CvdServer::Join() {
+  for (auto& thread : threads_) {
+    if (thread.joinable()) {
+      thread.join();
+    }
   }
 }
-
-void CvdServer::Stop() { running_ = false; }
 
 static Result<CvdServerHandler*> RequestHandler(
     const RequestWithStdio& request,
@@ -109,164 +122,109 @@ static Result<CvdServerHandler*> RequestHandler(
   return compatible_handlers[0];
 }
 
-Result<void> CvdServer::ServerLoop(SharedFD server) {
-  while (running_) {
-    auto client_fd = SharedFD::Accept(*server);
-    CF_EXPECT(client_fd->IsOpen(), client_fd->StrError());
-
-    auto message_queue = CF_EXPECT(ClientMessageQueue::Create(client_fd));
-
-    std::atomic_bool running = true;
-    std::mutex handler_mutex;
-    CvdServerHandler* handler = nullptr;
-    std::thread message_responder([this, &message_queue, &handler,
-                                   &handler_mutex, &running]() {
-      while (running) {
-        auto request = message_queue.WaitForRequest();
-        if (!request.ok()) {
-          LOG(DEBUG) << "Didn't get client request:"
-                     << request.error().message();
-          break;
-        }
-        fruit::Injector<> request_injector(RequestComponent, this);
-        Result<cvd::Response> response;
-        {
-          std::scoped_lock lock(handler_mutex);
-          auto handler_result = RequestHandler(
-              *request, request_injector.getMultibindings<CvdServerHandler>());
-          if (handler_result.ok()) {
-            handler = *handler_result;
-          } else {
-            handler = nullptr;
-            response = cvd::Response();
-            response->mutable_status()->set_code(cvd::Status::INTERNAL);
-            response->mutable_status()->set_message("No handler found");
-          }
-          // Drop the handler lock so it has a chance to be interrupted.
-        }
-        if (handler) {
-          response = handler->Handle(*request);
-        }
-        {
-          std::scoped_lock lock(handler_mutex);
-          handler = nullptr;
-        }
-        if (!response.ok()) {
-          LOG(DEBUG) << "Error handling request: " << request.error().message();
-          cvd::Response error_response;
-          error_response.mutable_status()->set_code(cvd::Status::INTERNAL);
-          error_response.mutable_status()->set_message(
-              response.error().message());
-          response = error_response;
-        }
-        auto write_response = message_queue.PostResponse(*response);
-        if (!write_response.ok()) {
-          LOG(DEBUG) << "Error writing response: " << write_response.error();
-          break;
-        }
-      }
-    });
-
-    message_queue.Join();
-    // The client has gone away, do our best to interrupt/stop ongoing
-    // operations.
-    running = false;
-    {
-      // This might end up executing after the handler is completed, but it at
-      // least won't race with the handler being overwritten by another pointer.
-      std::scoped_lock lock(handler_mutex);
-      if (handler) {
-        auto interrupt = handler->Interrupt();
-        if (!interrupt.ok()) {
-          LOG(ERROR) << "Failed to interrupt handler: " << interrupt.error();
-        }
-      }
+class ScopeGuard {
+ public:
+  ScopeGuard(std::function<void()> fn) : fn_(fn) {}
+  ~ScopeGuard() {
+    if (fn_) {
+      fn_();
     }
-    message_responder.join();
   }
+  void Cancel() { fn_ = nullptr; }
+
+ private:
+  std::function<void()> fn_;
+};
+
+Result<void> CvdServer::StartServer(SharedFD server_fd) {
+  auto cb = [this](EpollEvent ev) -> Result<void> {
+    CF_EXPECT(AcceptClient(ev));
+    return {};
+  };
+  CF_EXPECT(epoll_pool_.Register(server_fd, EPOLLIN, cb));
   return {};
 }
 
-cvd::Status CvdServer::CvdFleet(const SharedFD& out,
-                                const std::string& env_config) const {
-  std::lock_guard assemblies_lock(assemblies_mutex_);
-  for (const auto& it : assemblies_) {
-    const AssemblyDir& assembly_dir = it.first;
-    const AssemblyInfo& assembly_info = it.second;
-    auto config_path = GetCuttlefishConfigPath(assembly_dir);
-    if (FileExists(env_config)) {
-      config_path = env_config;
-    }
-    if (config_path) {
-      // Reads CuttlefishConfig::instance_names(), which must remain stable
-      // across changes to config file format (within server_constants.h major
-      // version).
-      auto config = CuttlefishConfig::GetFromFile(*config_path);
-      if (config) {
-        for (const std::string& instance_name : config->instance_names()) {
-          Command command(assembly_info.host_binaries_dir + kStatusBin);
-          command.AddParameter("--print");
-          command.AddParameter("--instance_name=", instance_name);
-          command.RedirectStdIO(Subprocess::StdIOChannel::kStdOut, out);
-          command.AddEnvironmentVariable(kCuttlefishConfigEnvVarName,
-                                         *config_path);
-          if (int wait_result = command.Start().Wait(); wait_result != 0) {
-            WriteAll(out, "      (unknown instance status error)");
-          }
-        }
-      }
-    }
-  }
-  cvd::Status status;
-  status.set_code(cvd::Status::OK);
-  return status;
+Result<void> CvdServer::AcceptClient(EpollEvent event) {
+  ScopeGuard stop_on_failure([this] { Stop(); });
+
+  CF_EXPECT(event.events & EPOLLIN);
+  auto client_fd = SharedFD::Accept(*event.fd);
+  CF_EXPECT(client_fd->IsOpen(), client_fd->StrError());
+  auto client_cb = [this](EpollEvent ev) -> Result<void> {
+    CF_EXPECT(HandleMessage(ev));
+    return {};
+  };
+  CF_EXPECT(epoll_pool_.Register(client_fd, EPOLLIN, client_cb));
+
+  auto self_cb = [this](EpollEvent ev) -> Result<void> {
+    CF_EXPECT(AcceptClient(ev));
+    return {};
+  };
+  CF_EXPECT(epoll_pool_.Register(event.fd, EPOLLIN, self_cb));
+
+  stop_on_failure.Cancel();
+  return {};
 }
 
-cvd::Status CvdServer::CvdClear(const SharedFD& out, const SharedFD& err) {
-  std::lock_guard assemblies_lock(assemblies_mutex_);
-  cvd::Status status;
-  for (const auto& it : assemblies_) {
-    const AssemblyDir& assembly_dir = it.first;
-    const AssemblyInfo& assembly_info = it.second;
-    auto config_path = GetCuttlefishConfigPath(assembly_dir);
-    if (config_path) {
-      // Stop all instances that are using this assembly dir.
-      Command command(assembly_info.host_binaries_dir + kStopBin);
-      // Delete the instance dirs.
-      command.AddParameter("--clear_instance_dirs");
-      command.RedirectStdIO(Subprocess::StdIOChannel::kStdOut, out);
-      command.RedirectStdIO(Subprocess::StdIOChannel::kStdErr, err);
-      command.AddEnvironmentVariable(kCuttlefishConfigEnvVarName, *config_path);
-      if (int wait_result = command.Start().Wait(); wait_result != 0) {
-        WriteAll(out,
-                 "Warning: error stopping instances for assembly dir " +
-                     assembly_dir +
-                     ".\nThis can happen if instances are already stopped.\n");
-      }
+Result<void> CvdServer::HandleMessage(EpollEvent event) {
+  ScopeGuard abandon_client([this, event] { epoll_pool_.Remove(event.fd); });
 
-      // Delete the assembly dir.
-      WriteAll(out, "Deleting " + assembly_dir + "\n");
-      if (DirectoryExists(assembly_dir) &&
-          !RecursivelyRemoveDirectory(assembly_dir)) {
-        status.set_code(cvd::Status::FAILED_PRECONDITION);
-        status.set_message("Unable to rmdir " + assembly_dir);
-        return status;
-      }
-    }
+  if (event.events & EPOLLHUP) {  // Client went away.
+    epoll_pool_.Remove(event.fd);
+    return {};
   }
-  RemoveFile(StringFromEnv("HOME", ".") + "/cuttlefish_runtime");
-  RemoveFile(GetGlobalConfigFileLink());
-  WriteAll(out,
-           "Stopped all known instances and deleted all "
-           "known assembly and instance dirs.\n");
 
-  assemblies_.clear();
-  status.set_code(cvd::Status::OK);
-  return status;
+  CF_EXPECT(event.events & EPOLLIN);
+  auto request = CF_EXPECT(GetRequest(event.fd));
+  if (!request) {  // End-of-file / client went away.
+    epoll_pool_.Remove(event.fd);
+    return {};
+  }
+
+  fruit::Injector<> injector(RequestComponent, this, &instance_manager_);
+  auto possible_handlers = injector.getMultibindings<CvdServerHandler>();
+
+  // Even if the interrupt callback outlives the request handler, it'll only
+  // hold on to this struct which will be cleaned out when the request handler
+  // exits.
+  struct SharedState {
+    CvdServerHandler* handler;
+    std::mutex mutex;
+  };
+  auto shared = std::make_shared<SharedState>();
+  shared->handler = CF_EXPECT(RequestHandler(*request, possible_handlers));
+
+  auto interrupt_cb = [shared](EpollEvent) -> Result<void> {
+    std::lock_guard lock(shared->mutex);
+    CF_EXPECT(shared->handler != nullptr);
+    CF_EXPECT(shared->handler->Interrupt());
+    return {};
+  };
+  CF_EXPECT(epoll_pool_.Register(event.fd, EPOLLHUP, interrupt_cb));
+
+  auto response = CF_EXPECT(shared->handler->Handle(*request));
+  CF_EXPECT(SendResponse(event.fd, response));
+
+  {
+    std::lock_guard lock(shared->mutex);
+    shared->handler = nullptr;
+  }
+  CF_EXPECT(epoll_pool_.Remove(event.fd));  // Delete interrupt handler
+
+  auto self_cb = [this](EpollEvent ev) -> Result<void> {
+    CF_EXPECT(HandleMessage(ev));
+    return {};
+  };
+  CF_EXPECT(epoll_pool_.Register(event.fd, EPOLLIN, self_cb));
+
+  abandon_client.Cancel();
+  return {};
 }
 
 static fruit::Component<CvdServer> ServerComponent() {
-  return fruit::createComponent();
+  return fruit::createComponent()
+      .install(EpollLoopComponent);
 }
 
 static Result<int> CvdServerMain(int argc, char** argv) {
@@ -288,7 +246,9 @@ static Result<int> CvdServerMain(int argc, char** argv) {
   CF_EXPECT(server_fd->IsOpen(), "Did not receive a valid cvd_server fd");
 
   fruit::Injector<CvdServer> injector(ServerComponent);
-  CF_EXPECT(injector.get<CvdServer&>().ServerLoop(server_fd));
+  CvdServer& server = injector.get<CvdServer&>();
+  server.StartServer(server_fd);
+  server.Join();
 
   return 0;
 }
