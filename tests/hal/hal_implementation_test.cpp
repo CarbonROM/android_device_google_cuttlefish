@@ -132,9 +132,6 @@ static const std::set<VersionedAidlPackage> kKnownMissingAidl = {
     {"android.hardware.common.", 2},
     {"android.hardware.common.fmq.", 1},
 
-    // This interface needs to be implemented (b/215332992)
-    {"android.hardware.graphics.allocator.", 1},
-
     {"android.hardware.graphics.common.", 1},
     {"android.hardware.graphics.common.", 2},
     {"android.hardware.graphics.common.", 3},
@@ -151,10 +148,6 @@ static const std::set<VersionedAidlPackage> kKnownMissingAidl = {
 
     // No implementations on cuttlefish for omapi aidl hal
     {"android.se.omapi.", 1},
-
-    // Temporarily treat the dice hal default implementation as missing until it
-    // and its dependencies have landed. b/198197213
-    {"android.hardware.security.dice.", 1},
 
     // These KeyMaster types are in an AIDL types-only HAL because they're used
     // by the Identity Credential AIDL HAL. Remove this when fully porting
