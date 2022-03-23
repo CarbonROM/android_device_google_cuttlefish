@@ -64,6 +64,7 @@ class CvdServer {
 
   Result<void> AcceptClient(EpollEvent);
   Result<void> HandleMessage(EpollEvent);
+  Result<cvd::Response> HandleRequest(RequestWithStdio, SharedFD client);
   Result<void> BestEffortWakeup();
 
   EpollPool& epoll_pool_;
@@ -81,6 +82,7 @@ fruit::Component<fruit::Required<InstanceManager>> cvdCommandComponent();
 fruit::Component<fruit::Required<CvdServer, InstanceManager>>
 cvdShutdownComponent();
 fruit::Component<> cvdVersionComponent();
+fruit::Component<> AcloudCommandComponent();
 
 struct CommandInvocation {
   std::string command;
