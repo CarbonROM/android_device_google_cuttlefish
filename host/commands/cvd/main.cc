@@ -35,10 +35,13 @@
 #include "common/libs/utils/files.h"
 #include "common/libs/utils/flag_parser.h"
 #include "common/libs/utils/result.h"
+#include "common/libs/utils/shared_fd_flag.h"
 #include "common/libs/utils/subprocess.h"
 #include "common/libs/utils/unix_sockets.h"
+#include "host/commands/cvd/server.h"
 #include "host/commands/cvd/server_constants.h"
 #include "host/libs/config/cuttlefish_config.h"
+#include "host/libs/config/host_tools_version.h"
 
 namespace cuttlefish {
 namespace {
@@ -99,8 +102,14 @@ class CvdClient {
     if (server_version.build() != android::build::GetBuildNumber()) {
       std::cerr << "WARNING: cvd_server client version ("
                 << android::build::GetBuildNumber()
-                << ") does not match  server version ("
-                << server_version.build() << std::endl;
+                << ") does not match server version (" << server_version.build()
+                << std::endl;
+    }
+    auto self_crc32 = FileCrc("/proc/self/exe");
+    if (server_version.crc32() != self_crc32) {
+      std::cerr << "WARNING: cvd_server client checksum (" << self_crc32
+                << ") doesn't match server checksum (" << server_version.crc32()
+                << std::endl;
     }
     return {};
   }
@@ -238,8 +247,8 @@ class CvdClient {
     // TODO(b/196114111): Investigate fully "daemonizing" the cvd_server.
     CF_EXPECT(setenv("ANDROID_HOST_OUT", host_tool_directory.c_str(),
                      /*overwrite=*/true) == 0);
-    Command command(HostBinaryPath("cvd_server"));
-    command.AddParameter("-server_fd=", server_fd);
+    Command command("/proc/self/exe");
+    command.AddParameter("-INTERNAL_server_fd=", server_fd);
     SubprocessOptions options;
     options.ExitWithParent(false);
     command.Start(options);
@@ -315,8 +324,19 @@ Result<int> CvdMain(int argc, char** argv, char** envp) {
   }
   bool clean = false;
   flags.emplace_back(GflagsCompatFlag("clean", clean));
+  SharedFD internal_server_fd;
+  flags.emplace_back(SharedFDFlag("INTERNAL_server_fd", internal_server_fd));
 
   CF_EXPECT(ParseFlags(flags, args));
+
+  if (internal_server_fd->IsOpen()) {
+    return CF_EXPECT(CvdServerMain(internal_server_fd));
+  } else if (argv[0] == std::string("/proc/self/exe")) {
+    return CF_ERR(
+        "Expected to be in server mode, but didn't get a server "
+        "fd: "
+        << internal_server_fd->StrError());
+  }
 
   // Special case for `cvd kill-server`, handled by directly
   // stopping the cvd_server.
