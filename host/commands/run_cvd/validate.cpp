@@ -19,6 +19,7 @@
 #include <iostream>
 
 #include "common/libs/utils/network.h"
+#include "common/libs/utils/result.h"
 #include "host/libs/config/cuttlefish_config.h"
 #include "host/libs/config/feature.h"
 #include "host/libs/vm_manager/host_configuration.h"
@@ -28,7 +29,7 @@ namespace {
 
 using vm_manager::ValidateHostConfiguration;
 
-class ValidateTapDevices : public Feature {
+class ValidateTapDevices : public SetupFeature {
  public:
   INJECT(ValidateTapDevices(const CuttlefishConfig::InstanceSpecific& instance))
       : instance_(instance) {}
@@ -37,27 +38,23 @@ class ValidateTapDevices : public Feature {
   bool Enabled() const override { return true; }
 
  private:
-  std::unordered_set<Feature*> Dependencies() const override { return {}; }
-  bool Setup() override {
-    auto used_tap_devices = TapInterfacesInUse();
-    if (used_tap_devices.count(instance_.wifi_tap_name())) {
-      LOG(ERROR) << "Wifi TAP device already in use";
-      return false;
-    } else if (used_tap_devices.count(instance_.mobile_tap_name())) {
-      LOG(ERROR) << "Mobile TAP device already in use";
-      return false;
-    } else if (used_tap_devices.count(instance_.ethernet_tap_name())) {
-      LOG(ERROR) << "Ethernet TAP device already in use";
-      return false;
-    }
-    return true;
+  std::unordered_set<SetupFeature*> Dependencies() const override { return {}; }
+  Result<void> ResultSetup() override {
+    auto taps = TapInterfacesInUse();
+    auto wifi = instance_.wifi_tap_name();
+    CF_EXPECT(taps.count(wifi) == 0, "Device \"" << wifi << "\" in use");
+    auto mobile = instance_.mobile_tap_name();
+    CF_EXPECT(taps.count(mobile) == 0, "Device \"" << mobile << "\" in use");
+    auto eth = instance_.ethernet_tap_name();
+    CF_EXPECT(taps.count(eth) == 0, "Device \"" << eth << "\" in use");
+    return {};
   }
 
  private:
   const CuttlefishConfig::InstanceSpecific& instance_;
 };
 
-class ValidateHostConfigurationFeature : public Feature {
+class ValidateHostConfigurationFeature : public SetupFeature {
  public:
   INJECT(ValidateHostConfigurationFeature()) {}
 
@@ -71,7 +68,7 @@ class ValidateHostConfigurationFeature : public Feature {
   std::string Name() const override { return "ValidateHostConfiguration"; }
 
  private:
-  std::unordered_set<Feature*> Dependencies() const override { return {}; }
+  std::unordered_set<SetupFeature*> Dependencies() const override { return {}; }
   bool Setup() override {
     // Check host configuration
     std::vector<std::string> config_commands;
@@ -94,8 +91,8 @@ class ValidateHostConfigurationFeature : public Feature {
 fruit::Component<fruit::Required<const CuttlefishConfig::InstanceSpecific>>
 validationComponent() {
   return fruit::createComponent()
-      .addMultibinding<Feature, ValidateHostConfigurationFeature>()
-      .addMultibinding<Feature, ValidateTapDevices>();
+      .addMultibinding<SetupFeature, ValidateHostConfigurationFeature>()
+      .addMultibinding<SetupFeature, ValidateTapDevices>();
 }
 
 }  // namespace cuttlefish

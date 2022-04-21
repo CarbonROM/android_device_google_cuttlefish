@@ -162,12 +162,13 @@ Result<const CuttlefishConfig*> InitFilesystemAndCreateConfig(
                                                     FLAGS_modem_simulator_count,
                                                     kernel_config, injector);
     std::set<std::string> preserving;
-    bool create_os_composite_disk = ShouldCreateOsCompositeDisk(config);
-    if (FLAGS_resume && create_os_composite_disk) {
+    auto os_builder = OsCompositeDiskBuilder(config);
+    bool creating_os_disk = CF_EXPECT(os_builder.WillRebuildCompositeDisk());
+    if (FLAGS_resume && creating_os_disk) {
       LOG(INFO) << "Requested resuming a previous session (the default behavior) "
                 << "but the base images have changed under the overlay, making the "
                 << "overlay incompatible. Wiping the overlay files.";
-    } else if (FLAGS_resume && !create_os_composite_disk) {
+    } else if (FLAGS_resume && !creating_os_disk) {
       preserving.insert("overlay.img");
       preserving.insert("ap_overlay.img");
       preserving.insert("os_composite_disk_config.txt");
@@ -348,10 +349,8 @@ Result<int> AssembleCvdMain(int argc, char** argv) {
 
   fruit::Injector<> injector(FlagsComponent);
   auto flag_features = injector.getMultibindings<FlagFeature>();
-  if (!FlagFeature::ProcessFlags(flag_features, args)) {
-    LOG(ERROR) << "Failed to parse flags.";
-    return 1;
-  }
+  CF_EXPECT(FlagFeature::ProcessFlags(flag_features, args),
+            "Failed to parse flags.");
 
   if (help || help_str != "") {
     LOG(WARNING) << "TODO(schuffelen): Implement `--help` for assemble_cvd.";

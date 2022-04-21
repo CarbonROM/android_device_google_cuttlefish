@@ -49,7 +49,7 @@ bool CreateQcowOverlay(const std::string& crosvm_path,
   return true;
 }
 
-class ServerLoopImpl : public ServerLoop, public Feature {
+class ServerLoopImpl : public ServerLoop, public SetupFeature {
  public:
   INJECT(ServerLoopImpl(const CuttlefishConfig& config,
                         const CuttlefishConfig::InstanceSpecific& instance))
@@ -63,16 +63,19 @@ class ServerLoopImpl : public ServerLoop, public Feature {
       LauncherAction action;
       while (client->IsOpen() && client->Read(&action, sizeof(action)) > 0) {
         switch (action) {
-          case LauncherAction::kStop:
-            if (process_monitor.StopMonitoredProcesses()) {
+          case LauncherAction::kStop: {
+            auto stop = process_monitor.StopMonitoredProcesses();
+            if (stop.ok()) {
               auto response = LauncherResponse::kSuccess;
               client->Write(&response, sizeof(response));
               std::exit(0);
             } else {
+              LOG(ERROR) << "Failed to stop subprocesses:\n" << stop.error();
               auto response = LauncherResponse::kError;
               client->Write(&response, sizeof(response));
             }
             break;
+          }
           case LauncherAction::kStatus: {
             // TODO(schuffelen): Return more information on a side channel
             auto response = LauncherResponse::kSuccess;
@@ -81,8 +84,9 @@ class ServerLoopImpl : public ServerLoop, public Feature {
           }
           case LauncherAction::kPowerwash: {
             LOG(INFO) << "Received a Powerwash request from the monitor socket";
-            if (!process_monitor.StopMonitoredProcesses()) {
-              LOG(ERROR) << "Stopping processes failed.";
+            auto stop = process_monitor.StopMonitoredProcesses();
+            if (!stop.ok()) {
+              LOG(ERROR) << "Stopping processes failed:\n" << stop.error();
               auto response = LauncherResponse::kError;
               client->Write(&response, sizeof(response));
               break;
@@ -104,8 +108,9 @@ class ServerLoopImpl : public ServerLoop, public Feature {
             break;
           }
           case LauncherAction::kRestart: {
-            if (!process_monitor.StopMonitoredProcesses()) {
-              LOG(ERROR) << "Stopping processes failed.";
+            auto stop = process_monitor.StopMonitoredProcesses();
+            if (!stop.ok()) {
+              LOG(ERROR) << "Stopping processes failed:\n" << stop.error();
               auto response = LauncherResponse::kError;
               client->Write(&response, sizeof(response));
               break;
@@ -131,12 +136,12 @@ class ServerLoopImpl : public ServerLoop, public Feature {
     }
   }
 
-  // Feature
+  // SetupFeature
   std::string Name() const override { return "ServerLoop"; }
 
  private:
   bool Enabled() const override { return true; }
-  std::unordered_set<Feature*> Dependencies() const override { return {}; }
+  std::unordered_set<SetupFeature*> Dependencies() const override { return {}; }
   bool Setup() {
     auto launcher_monitor_path = instance_.launcher_monitor_socket_path();
     server_ = SharedFD::SocketLocalServer(launcher_monitor_path.c_str(), false,
@@ -251,7 +256,7 @@ fruit::Component<fruit::Required<const CuttlefishConfig,
 serverLoopComponent() {
   return fruit::createComponent()
       .bind<ServerLoop, ServerLoopImpl>()
-      .addMultibinding<Feature, ServerLoopImpl>();
+      .addMultibinding<SetupFeature, ServerLoopImpl>();
 }
 
 }  // namespace cuttlefish

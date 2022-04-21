@@ -71,8 +71,13 @@ Result<Json::Value> ReadJsonFromFile(const std::string& path) {
 
 class ReadEvalPrintLoop {
  public:
-  ReadEvalPrintLoop(GceApi& gce, BuildApi& build, int in_fd, int out_fd)
-      : gce_(gce), build_(build), in_(in_fd), out_(out_fd) {}
+  ReadEvalPrintLoop(GceApi& gce, BuildApi& build, int in_fd, int out_fd,
+                    bool internal_addresses)
+      : gce_(gce),
+        build_(build),
+        in_(in_fd),
+        out_(out_fd),
+        internal_addresses_(internal_addresses) {}
 
   Result<void> Process() {
     while (true) {
@@ -139,7 +144,7 @@ class ReadEvalPrintLoop {
     CF_EXPECT(request.id().name() != "", "Instance name must be specified");
     CF_EXPECT(request.id().zone() != "", "Instance zone must be specified");
     auto instance = CF_EXPECT(ScopedGceInstance::CreateDefault(
-        gce_, request.id().zone(), request.id().name()));
+        gce_, request.id().zone(), request.id().name(), internal_addresses_));
     instances_.emplace(request.id().name(), std::move(instance));
     return {};
   }
@@ -226,8 +231,7 @@ class ReadEvalPrintLoop {
 
     struct {
       ScopedGceInstance* instance;
-      SharedFD tcp_server;
-      SharedFD tcp_client;
+      SharedFD ssh_in;
       std::optional<Subprocess> ssh_proc;
       Result<void> result;
     } callback_state;
@@ -242,32 +246,20 @@ class ReadEvalPrintLoop {
           return false;
         }
 
-        auto tcp_server = ssh->TcpServerStdin();
-        if (!tcp_server.ok()) {
-          callback_state.result = CF_ERR("ssh tcp server failed\n"
-                                         << tcp_server.error());
+        SharedFD ssh_stdin_out;
+        if (!SharedFD::Pipe(&ssh_stdin_out, &callback_state.ssh_in)) {
+          callback_state.result = CF_ERRNO("pipe failed");
           return false;
         }
-        callback_state.tcp_server = *tcp_server;
 
         ssh->RemoteParameter("cat >" + request.remote_path());
-        callback_state.ssh_proc = ssh->Build().Start();
-
-        callback_state.tcp_client = SharedFD::Accept(**tcp_server);
-        if (!callback_state.tcp_client->IsOpen()) {
-          callback_state.ssh_proc->Stop();
-          callback_state.ssh_proc->Wait();
-          callback_state.result =
-              CF_ERR("Failed to accept TCP client: "
-                     << callback_state.tcp_client->StrError());
-          return false;
-        }
-      }
-      if (WriteAll(callback_state.tcp_client, data, size) != size) {
+        auto command = ssh->Build();
+        command.RedirectStdIO(Subprocess::StdIOChannel::kStdIn, ssh_stdin_out);
+        callback_state.ssh_proc = command.Start();
+      } else if (WriteAll(callback_state.ssh_in, data, size) != size) {
         callback_state.ssh_proc->Stop();
-        callback_state.result =
-            CF_ERR("Failed to write contents\n"
-                   << callback_state.tcp_client->StrError());
+        callback_state.result = CF_ERR("Failed to write contents\n"
+                                       << callback_state.ssh_in->StrError());
         return false;
       }
       return true;
@@ -281,11 +273,7 @@ class ReadEvalPrintLoop {
                     ? "Unknown failure"
                     : callback_state.result.error().message() + "\n)"));
 
-    if (callback_state.tcp_client->IsOpen() &&
-        callback_state.tcp_client->Shutdown(SHUT_WR) != 0) {
-      return CF_ERR("Failed to shutdown socket: "
-                    << callback_state.tcp_client->StrError());
-    }
+    callback_state.ssh_in->Close();
 
     if (callback_state.ssh_proc) {
       auto ssh_ret = callback_state.ssh_proc->Wait();
@@ -300,16 +288,20 @@ class ReadEvalPrintLoop {
               "Instance \"" << request.instance().name() << "\" not found");
 
     auto ssh = CF_EXPECT(instance->second->Ssh());
-    auto tcp = CF_EXPECT(ssh.TcpServerStdin());
 
     ssh.RemoteParameter("cat >" + request.remote_path());
 
-    auto ssh_proc = ssh.Build().Start();
+    auto command = ssh.Build();
 
-    auto client = SharedFD::Accept(*tcp);
-    if (!client->IsOpen()) {
-      ssh_proc.Stop();
-      return CF_ERR("Failed to accept TCP client: " << client->StrError());
+    SharedFD ssh_stdin_out, ssh_stdin_in;
+    CF_EXPECT(SharedFD::Pipe(&ssh_stdin_out, &ssh_stdin_in), strerror(errno));
+    command.RedirectStdIO(Subprocess::StdIOChannel::kStdIn, ssh_stdin_out);
+
+    auto ssh_proc = command.Start();
+    ssh_stdin_out->Close();
+
+    {
+      Command unused = std::move(command);  // force deletion
     }
 
     while (true) {
@@ -341,15 +333,15 @@ class ReadEvalPrintLoop {
       }
       LOG(INFO) << "going to write message of size "
                 << data_msg.data().contents().size();
-      if (WriteAll(client, data_msg.data().contents()) !=
+      if (WriteAll(ssh_stdin_in, data_msg.data().contents()) !=
           data_msg.data().contents().size()) {
         ssh_proc.Stop();
-        return CF_ERR("Failed to write contents: " << client->StrError());
+        return CF_ERR("Failed to write contents: " << ssh_stdin_in->StrError());
       }
       LOG(INFO) << "successfully wrote message?";
     }
 
-    CF_EXPECT(client->Shutdown(SHUT_WR) != 0, client->StrError());
+    ssh_stdin_in->Close();
 
     auto ssh_ret = ssh_proc.Wait();
     CF_EXPECT(ssh_ret == 0, "SSH command failed with code: " << ssh_ret);
@@ -361,6 +353,7 @@ class ReadEvalPrintLoop {
   BuildApi& build_;
   google::protobuf::io::FileInputStream in_;
   int out_;
+  bool internal_addresses_;
 
   std::unordered_map<std::string, std::unique_ptr<ScopedGceInstance>>
       instances_;
@@ -375,6 +368,9 @@ Result<void> TestGceDriverMain(int argc, char** argv) {
                                       service_account_json_private_key_path));
   std::string cloud_project = "";
   flags.emplace_back(GflagsCompatFlag("cloud-project", cloud_project));
+  bool internal_addresses = false;
+  flags.emplace_back(
+      GflagsCompatFlag("internal-addresses", internal_addresses));
 
   std::vector<std::string> args =
       ArgsToVec(argc - 1, argv + 1);  // Skip argv[0]
@@ -398,7 +394,8 @@ Result<void> TestGceDriverMain(int argc, char** argv) {
 
   BuildApi build(*curl, &build_creds);
 
-  ReadEvalPrintLoop executor(gce, build, STDIN_FILENO, STDOUT_FILENO);
+  ReadEvalPrintLoop executor(gce, build, STDIN_FILENO, STDOUT_FILENO,
+                             internal_addresses);
   LOG(INFO) << "Starting processing";
   CF_EXPECT(executor.Process());
 
