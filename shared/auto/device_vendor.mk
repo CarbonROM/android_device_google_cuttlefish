@@ -83,7 +83,7 @@ PRODUCT_COPY_FILES += \
 
 # vehicle HAL
 ifeq ($(LOCAL_VHAL_PRODUCT_PACKAGE),)
-    LOCAL_VHAL_PRODUCT_PACKAGE := android.hardware.automotive.vehicle@2.0-emulator-service
+    LOCAL_VHAL_PRODUCT_PACKAGE := android.hardware.automotive.vehicle@V1-emulator-service
     BOARD_SEPOLICY_DIRS += device/google/cuttlefish/shared/auto/sepolicy/vhal
 endif
 PRODUCT_PACKAGES += $(LOCAL_VHAL_PRODUCT_PACKAGE)
@@ -94,6 +94,7 @@ PRODUCT_PACKAGES += android.hardware.broadcastradio@2.0-service
 # AudioControl HAL
 ifeq ($(LOCAL_AUDIOCONTROL_HAL_PRODUCT_PACKAGE),)
     LOCAL_AUDIOCONTROL_HAL_PRODUCT_PACKAGE := android.hardware.automotive.audiocontrol-service.example
+    BOARD_SEPOLICY_DIRS += device/google/cuttlefish/shared/auto/sepolicy/audio
 endif
 PRODUCT_PACKAGES += $(LOCAL_AUDIOCONTROL_HAL_PRODUCT_PACKAGE)
 
