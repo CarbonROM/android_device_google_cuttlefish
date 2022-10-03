@@ -66,7 +66,6 @@ PRODUCT_REQUIRES_INSECURE_EXECMEM_FOR_SWIFTSHADER := true
 AB_OTA_UPDATER := true
 AB_OTA_PARTITIONS += \
     boot \
-    init_boot \
     odm \
     odm_dlkm \
     product \
@@ -78,6 +77,11 @@ AB_OTA_PARTITIONS += \
     vendor \
     vendor_boot \
     vendor_dlkm \
+
+TARGET_USES_INITBOOT ?= true
+ifeq ($(TARGET_USES_INITBOOT),true)
+AB_OTA_PARTITIONS += init_boot
+endif
 
 # Enable Virtual A/B
 $(call inherit-product, $(SRC_TARGET_DIR)/product/virtual_ab_ota/android_t_baseline.mk)
@@ -403,7 +407,6 @@ PRODUCT_PACKAGES += \
 ifeq ($(TARGET_ENABLE_DRMHWCOMPOSER),true)
 DEVICE_MANIFEST_FILE += \
     device/google/cuttlefish/shared/config/manifest_android.hardware.graphics.composer@2.4-service.xml
-
 PRODUCT_PACKAGES += \
     android.hardware.graphics.composer@2.4-service \
     hwcomposer.drm
@@ -828,18 +831,6 @@ PRODUCT_VENDOR_PROPERTIES += \
 # Enable GPU-intensive background blur support on Cuttlefish when requested by apps
 PRODUCT_VENDOR_PROPERTIES += \
     ro.surface_flinger.supports_background_blur 1
-
-# Set support one-handed mode
-PRODUCT_PRODUCT_PROPERTIES += \
-    ro.support_one_handed_mode=true
-
-# Set one_handed_mode screen translate offset percentage
-PRODUCT_PRODUCT_PROPERTIES += \
-    persist.debug.one_handed_offset_percentage=50
-
-# Set one_handed_mode translate animation duration milliseconds
-PRODUCT_PRODUCT_PROPERTIES += \
-    persist.debug.one_handed_translate_animation_duration=300
 
 # Vendor Dlkm Locader
 PRODUCT_PACKAGES += \
