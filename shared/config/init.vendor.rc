@@ -6,6 +6,7 @@ on early-init
     setprop debug.sf.vsync_reactor_ignore_present_fences true
     setprop ro.hardware.gralloc ${ro.boot.hardware.gralloc}
     setprop ro.hardware.hwcomposer ${ro.boot.hardware.hwcomposer}
+    setprop ro.vendor.hwcomposer.display_finder_mode ${ro.boot.hardware.hwcomposer.display_finder_mode}
     setprop ro.vendor.hwcomposer.mode ${ro.boot.hardware.hwcomposer.mode}
     setprop ro.hardware.vulkan ${ro.boot.hardware.vulkan}
     setprop ro.cpuvulkan.version ${ro.boot.cpuvulkan.version}
@@ -54,7 +55,7 @@ on post-fs
     # set RLIMIT_MEMLOCK to 64MB
     setrlimit 8 67108864 67108864
 
-on post-fs-data
+on post-fs-data && property:ro.vendor.disable_rename_eth0=
     # works around framework netiface enumeration issue
     # TODO(b/202731768): Add this `start rename_eth0` command to the init.rc for rename_netiface
     start rename_eth0

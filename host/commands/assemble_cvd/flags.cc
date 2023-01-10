@@ -597,15 +597,6 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
       }
   }
 
-  // The device needs to avoid having both hwcomposer2.4 and hwcomposer3
-  // services running at the same time so warn the user to manually build
-  // in drm_hwcomposer when needed.
-  if (tmp_config_obj.hwcomposer() == kHwComposerAuto) {
-    LOG(WARNING) << "In order to run with --hwcomposer=drm. Please make sure "
-                    "Cuttlefish was built with "
-                    "TARGET_ENABLE_DRMHWCOMPOSER=true.";
-  }
-
   tmp_config_obj.set_enable_gpu_udmabuf(FLAGS_enable_gpu_udmabuf);
   tmp_config_obj.set_enable_gpu_angle(FLAGS_enable_gpu_angle);
 
@@ -768,7 +759,7 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
     const auto vsock_guest_cid = FLAGS_vsock_guest_cid + num - GetInstance();
     instance.set_vsock_guest_cid(vsock_guest_cid);
     auto calc_vsock_port = [vsock_guest_cid](const int base_port) {
-      // a base (vsock) port is like 9200 for modem_simulator, etc
+      // a base (vsock) port is like 9600 for modem_simulator, etc
       return cuttlefish::GetVsockServerPort(base_port, vsock_guest_cid);
     };
     instance.set_session_id(iface_config.mobile_tap.session_id);
@@ -891,10 +882,10 @@ CuttlefishConfig InitializeCuttlefishConfiguration(
     if (modem_simulator_count > 0) {
       std::stringstream modem_ports;
       for (auto index {0}; index < modem_simulator_count - 1; index++) {
-        auto port = 9200 + (modem_simulator_count * (num - 1)) + index;
+        auto port = 9600 + (modem_simulator_count * (num - 1)) + index;
         modem_ports << calc_vsock_port(port) << ",";
       }
-      auto port = 9200 + (modem_simulator_count * (num - 1)) +
+      auto port = 9600 + (modem_simulator_count * (num - 1)) +
                   modem_simulator_count - 1;
       modem_ports << calc_vsock_port(port);
       instance.set_modem_simulator_ports(modem_ports.str());
